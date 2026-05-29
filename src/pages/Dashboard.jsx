@@ -5,12 +5,11 @@ import AdminCargos from './AdminCargos'
 import AdminCorrecoes from './AdminCorrecoes'
 import BaterPonto from './BaterPonto'
 import RelatorioMensal from './RelatorioMensal'
+import PerfilColaborador from './PerfilColaborador'
 
 export default function Dashboard({ usuario, onLogout }) {
   const isAdmin = usuario.perfil === 'admin'
-
-  // Tela inicial: relatório mensal para todos
-  const [aba, setAba] = useState('relatorio')
+  const [aba, setAba] = useState(isAdmin ? 'relatorio' : 'ponto')
 
   const abas = [
     ...(isAdmin ? [{ id: 'aprovacoes', label: 'Aprovações' }] : []),
@@ -19,6 +18,7 @@ export default function Dashboard({ usuario, onLogout }) {
     ...(isAdmin ? [{ id: 'correcoes', label: 'Correções' }] : []),
     { id: 'ponto', label: 'Meu Ponto' },
     { id: 'relatorio', label: 'Relatório Mensal' },
+    { id: 'perfil', label: 'Meu Perfil' },
   ]
 
   return (
@@ -32,14 +32,21 @@ export default function Dashboard({ usuario, onLogout }) {
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
-          <h1 className="text-white font-bold text-lg">Ponto Eletrônico</h1>
+          <h1 className="text-white font-bold text-lg">Clockin App</h1>
         </div>
 
         <div className="flex items-center gap-3">
           <div className="hidden md:flex items-center gap-2">
-            <div className="w-8 h-8 bg-gray-700 rounded-full flex items-center justify-center text-white text-sm font-bold">
-              {usuario.nome?.charAt(0).toUpperCase()}
-            </div>
+            <button onClick={() => setAba('perfil')}
+              className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 border-0 shadow-none p-0 cursor-pointer hover:opacity-80 transition-opacity">
+              {usuario.foto_perfil ? (
+                <img src={usuario.foto_perfil} className="w-full h-full object-cover" alt="Foto" />
+              ) : (
+                <div className="w-full h-full bg-gray-700 flex items-center justify-center text-white text-sm font-bold">
+                  {usuario.nome?.charAt(0).toUpperCase()}
+                </div>
+              )}
+            </button>
             <span className="text-gray-300 text-sm">{usuario.nome}</span>
             {isAdmin && <span className="bg-green-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">Admin</span>}
           </div>
@@ -67,11 +74,19 @@ export default function Dashboard({ usuario, onLogout }) {
       {/* Conteúdo */}
       <div className="p-6">
         {aba === 'aprovacoes' && <AdminAprovacoes usuario={usuario} />}
-        {aba === 'colaboradores' && <Colaboradores usuario={usuario} />}
+        {aba === 'colaboradores' && <Colaboradores usuario={usuario} onVerPerfil={(id) => { setAba('perfil_colab_' + id) }} />}
         {aba === 'cargos' && <AdminCargos usuario={usuario} />}
         {aba === 'correcoes' && <AdminCorrecoes usuario={usuario} />}
         {aba === 'ponto' && <BaterPonto usuario={usuario} />}
         {aba === 'relatorio' && <RelatorioMensal usuario={usuario} />}
+        {aba === 'perfil' && <PerfilColaborador usuario={usuario} />}
+        {aba.startsWith('perfil_colab_') && (
+          <PerfilColaborador
+            usuario={usuario}
+            colaboradorId={aba.replace('perfil_colab_', '')}
+            onVoltar={() => setAba('colaboradores')}
+          />
+        )}
       </div>
     </div>
   )

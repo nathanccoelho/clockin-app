@@ -83,10 +83,12 @@ export default function Cadastro({ onVoltar }) {
   const loopRef = useRef(false)
   const capturedRef = useRef(false)
   const nomeRef = useRef(null)
+  const senhaRef = useRef(null)
   const timerRef = useRef(null)
 
   useEffect(() => {
     if (etapa === 'dados' && nomeRef.current) nomeRef.current.focus()
+    if (etapa === 'senha' && senhaRef.current) senhaRef.current.focus()
     if (etapa === 'facial') iniciarFacial()
     return () => {
       if (etapa === 'facial') pararFacial()
@@ -488,7 +490,7 @@ export default function Cadastro({ onVoltar }) {
         <p className="text-gray-400 text-sm mb-8">Mínimo 6 caracteres</p>
         <form onSubmit={avancarSenha} className="space-y-4">
           <div className="relative">
-            <input type={mostrarSenha ? 'text' : 'password'} placeholder="Senha"
+            <input ref={senhaRef} type={mostrarSenha ? 'text' : 'password'} placeholder="Senha"
               value={senhaForm.senha}
               onChange={e => setSenhaForm({ ...senhaForm, senha: e.target.value })}
               className={`w-full bg-gray-800 text-white border rounded-2xl p-4 pr-12 text-lg placeholder-gray-500 focus:outline-none transition-all ${errosCampo.senha ? 'border-red-500 shake' : 'border-gray-700 focus:border-green-500'}`}

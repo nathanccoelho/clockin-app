@@ -29,22 +29,26 @@ function calcularAbertura(pontos) {
   return (v1 + v2) / (2 * h)
 }
 
-export default function Colaboradores({ usuario }) {
+const ESCALAS = [
+  { value: '5x2', label: '5x2 — Seg a Sex' },
+  { value: '6x1_sabados', label: '6x1 — Seg a Sex + 2 sábados fixos/mês' },
+  { value: '5x2_sabados_variaveis', label: '5x2 + sábados variáveis' },
+  { value: 'livre', label: 'Livre — Escala variável' },
+]
+
+export default function Colaboradores({ usuario, onVerPerfil }) {
   const [colaboradores, setColaboradores] = useState([])
   const [cargos, setCargos] = useState([])
   const [loading, setLoading] = useState(true)
 
   // Modal cadastro
   const [modalCadastro, setModalCadastro] = useState(false)
-  const [form, setForm] = useState({ nome: '', cpf: '', email: '', telefone: '', cargo: '', salario_fixo: '', ajuda_custo_diaria: '', hora_extra_valor: '', pix: '' })
+  const [form, setForm] = useState({
+    nome: '', cpf: '', email: '', telefone: '', cargo: '', escala: '5x2',
+    salario_fixo: '', ajuda_custo: '', hora_extra_valor: '', cache_evento: ''
+  })
   const [salvando, setSalvando] = useState(false)
   const [msg, setMsg] = useState('')
-
-  // Modal editar
-  const [modalEditar, setModalEditar] = useState(null)
-  const [formEditar, setFormEditar] = useState({})
-  const [salvandoEditar, setSalvandoEditar] = useState(false)
-  const [msgEditar, setMsgEditar] = useState('')
 
   // Modal facial
   const [modalFacial, setModalFacial] = useState(null)
@@ -78,27 +82,20 @@ export default function Colaboradores({ usuario }) {
     setCargos(data || [])
   }
 
-  function abrirModalCadastro() {
-    setForm({ nome: '', cpf: '', email: '', telefone: '', cargo: '', salario_fixo: '', ajuda_custo_diaria: '', hora_extra_valor: '', pix: '' })
-    setMsg('')
-    setModalCadastro(true)
+  function calcularHoraExtra(salarioStr) {
+    const sal = desmascaraMoeda(salarioStr)
+    if (!sal) return ''
+    const diasMes = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()
+    return mascaraMoeda(String(Math.round((sal / diasMes / 9) * 100)))
   }
 
-  function abrirModalEditar(colab) {
-    setFormEditar({
-      nome: colab.nome || '',
-      cpf: colab.cpf || '',
-      email: colab.email || '',
-      telefone: colab.telefone || '',
-      cargo: colab.cargo || '',
-      data_admissao: colab.data_admissao || '',
-      salario_fixo: colab.salario_fixo ? mascaraMoeda(String(Math.round(colab.salario_fixo * 100))) : '',
-      ajuda_custo_diaria: colab.ajuda_custo_diaria ? mascaraMoeda(String(Math.round(colab.ajuda_custo_diaria * 100))) : '',
-      hora_extra_valor: colab.hora_extra_valor ? mascaraMoeda(String(Math.round(colab.hora_extra_valor * 100))) : '',
-      pix: colab.pix || '',
+  function abrirModalCadastro() {
+    setForm({
+      nome: '', cpf: '', email: '', telefone: '', cargo: '', escala: '5x2',
+      salario_fixo: '', ajuda_custo: '', hora_extra_valor: '', cache_evento: ''
     })
-    setMsgEditar('')
-    setModalEditar(colab)
+    setMsg('')
+    setModalCadastro(true)
   }
 
   async function salvar(e) {
@@ -110,10 +107,11 @@ export default function Colaboradores({ usuario }) {
       email: form.email.trim() || null,
       telefone: form.telefone.trim() || null,
       cargo: form.cargo,
+      escala: form.escala,
       salario_fixo: desmascaraMoeda(form.salario_fixo),
-      ajuda_custo_diaria: desmascaraMoeda(form.ajuda_custo_diaria),
+      ajuda_custo_diaria: desmascaraMoeda(form.ajuda_custo),
       hora_extra_valor: desmascaraMoeda(form.hora_extra_valor),
-      pix: form.pix.trim() || null,
+      cache_evento: desmascaraMoeda(form.cache_evento),
       empresa_id: usuario.empresa_id,
       status: 'aprovado', perfil: 'colaborador', ativo: true
     })
@@ -124,31 +122,6 @@ export default function Colaboradores({ usuario }) {
       carregar()
     }
     setSalvando(false)
-  }
-
-  async function salvarEditar(e) {
-    e.preventDefault()
-    setSalvandoEditar(true)
-    const { error } = await supabase.from('colaboradores').update({
-      nome: formEditar.nome.trim(),
-      cpf: formEditar.cpf.replace(/\D/g, ''),
-      email: formEditar.email.trim() || null,
-      telefone: formEditar.telefone.trim() || null,
-      cargo: formEditar.cargo,
-      data_admissao: formEditar.data_admissao || null,
-      salario_fixo: desmascaraMoeda(formEditar.salario_fixo),
-      ajuda_custo_diaria: desmascaraMoeda(formEditar.ajuda_custo_diaria),
-      hora_extra_valor: desmascaraMoeda(formEditar.hora_extra_valor),
-      pix: formEditar.pix.trim() || null,
-    }).eq('id', modalEditar.id)
-
-    if (error) {
-      setMsgEditar('Erro: ' + error.message)
-    } else {
-      setModalEditar(null)
-      carregar()
-    }
-    setSalvandoEditar(false)
   }
 
   // FACIAL
@@ -269,7 +242,8 @@ export default function Colaboradores({ usuario }) {
     setSalvandoFacial(true)
     const { error } = await supabase.from('colaboradores').update({
       face_descriptor: JSON.stringify(faceDescriptor),
-      face_cadastrada_em: new Date().toISOString()
+      face_cadastrada_em: new Date().toISOString(),
+      foto_perfil: facePreview,
     }).eq('id', modalFacial.id)
     if (error) {
       setFaceMsg('Erro ao salvar: ' + error.message)
@@ -309,8 +283,8 @@ export default function Colaboradores({ usuario }) {
                 <tr className="border-b border-gray-700">
                   <th className="text-gray-400 font-semibold p-3 text-left">Nome</th>
                   <th className="text-gray-400 font-semibold p-3 text-left">Cargo</th>
+                  <th className="text-gray-400 font-semibold p-3 text-left">Escala</th>
                   <th className="text-gray-400 font-semibold p-3 text-right">Salário</th>
-                  <th className="text-gray-400 font-semibold p-3 text-left">PIX</th>
                   <th className="text-gray-400 font-semibold p-3 text-center">Facial</th>
                   <th className="text-gray-400 font-semibold p-3 text-center">Ações</th>
                 </tr>
@@ -319,14 +293,19 @@ export default function Colaboradores({ usuario }) {
                 {colaboradores.map(c => (
                   <tr key={c.id} className="border-b border-gray-800 hover:bg-gray-800 transition-colors">
                     <td className="p-3">
-                      <p className="text-white font-semibold">{c.nome}</p>
+                      <button onClick={() => onVerPerfil(c.id)}
+                        className="text-white font-semibold hover:text-green-400 cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none text-left transition-colors">
+                        {c.nome}
+                      </button>
                       <p className="text-gray-500 text-xs">{c.cpf}</p>
                     </td>
                     <td className="p-3 text-gray-400">{c.cargo || '—'}</td>
+                    <td className="p-3 text-gray-400 text-xs">
+                      {ESCALAS.find(e => e.value === c.escala)?.label?.split(' — ')[0] || c.escala || '—'}
+                    </td>
                     <td className="p-3 text-gray-300 text-right">
                       {Number(c.salario_fixo || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                     </td>
-                    <td className="p-3 text-gray-400 text-sm">{c.pix || <span className="text-gray-600">—</span>}</td>
                     <td className="p-3 text-center">
                       {c.face_descriptor
                         ? <span className="text-green-400 text-xs font-semibold">✅ Cadastrada</span>
@@ -334,7 +313,7 @@ export default function Colaboradores({ usuario }) {
                     </td>
                     <td className="p-3 text-center">
                       <div className="flex gap-3 justify-center">
-                        <button onClick={() => abrirModalEditar(c)}
+                        <button onClick={() => onVerPerfil(c.id)}
                           className="text-green-400 text-sm font-semibold w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-green-300 transition-colors">
                           ✏️ Editar
                         </button>
@@ -358,7 +337,7 @@ export default function Colaboradores({ usuario }) {
       {/* Modal Cadastro */}
       {modalCadastro && (
         <div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4">
-          <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-lg border border-gray-700 max-h-screen overflow-y-auto">
+          <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-lg border border-gray-700 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-white text-lg font-bold">Cadastrar Colaborador</h3>
               <button onClick={() => setModalCadastro(false)}
@@ -389,8 +368,10 @@ export default function Colaboradores({ usuario }) {
                 </select>
               </div>
               <div>
-                <label className="block text-gray-400 text-sm mb-1">Chave PIX</label>
-                <input className={inputCls} placeholder="CPF, email, telefone ou chave aleatória" value={form.pix} onChange={e => setForm({...form, pix: e.target.value})} />
+                <label className="block text-gray-400 text-sm mb-1">Escala</label>
+                <select className={inputCls + ' cursor-pointer'} value={form.escala} onChange={e => setForm({...form, escala: e.target.value})}>
+                  {ESCALAS.map(e => <option key={e.value} value={e.value}>{e.label}</option>)}
+                </select>
               </div>
               <div>
                 <label className="block text-gray-400 text-sm mb-1">Salário Fixo</label>
@@ -400,19 +381,13 @@ export default function Colaboradores({ usuario }) {
               <div>
                 <label className="block text-gray-400 text-sm mb-1">Ajuda de Custo Mensal</label>
                 <input type="text" placeholder="R$ 0,00" className={inputCls}
-                  value={form.ajuda_custo_diaria} onChange={e => setForm({...form, ajuda_custo_diaria: mascaraMoeda(e.target.value)})} />
+                  value={form.ajuda_custo} onChange={e => setForm({...form, ajuda_custo: mascaraMoeda(e.target.value)})} />
               </div>
               <div>
                 <label className="block text-gray-400 text-sm mb-1">
                   Valor Hora Extra
                   <button type="button"
-                    onClick={() => {
-                      const sal = desmascaraMoeda(form.salario_fixo)
-                      if (!sal) return
-                      const diasMes = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()
-                      const valorHora = sal / diasMes / 9
-                      setForm({...form, hora_extra_valor: mascaraMoeda(String(Math.round(valorHora * 100)))})
-                    }}
+                    onClick={() => setForm({...form, hora_extra_valor: calcularHoraExtra(form.salario_fixo)})}
                     className="ml-2 text-green-400 text-xs font-normal w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-green-300">
                     ↻ calcular automático
                   </button>
@@ -421,6 +396,12 @@ export default function Colaboradores({ usuario }) {
                   value={form.hora_extra_valor} onChange={e => setForm({...form, hora_extra_valor: mascaraMoeda(e.target.value)})} />
                 <p className="text-gray-600 text-xs mt-1">Salário ÷ dias do mês ÷ 9h</p>
               </div>
+              <div>
+                <label className="block text-gray-400 text-sm mb-1">Cachê de Evento</label>
+                <input type="text" placeholder="R$ 0,00" className={inputCls}
+                  value={form.cache_evento} onChange={e => setForm({...form, cache_evento: mascaraMoeda(e.target.value)})} />
+                <p className="text-gray-600 text-xs mt-1">Valor fixo por evento (sáb/dom)</p>
+              </div>
               {msg && <p className="md:col-span-2 text-red-400 text-sm">{msg}</p>}
               <div className="md:col-span-2 flex gap-3 mt-2">
                 <button type="button" onClick={() => setModalCadastro(false)}
@@ -428,96 +409,6 @@ export default function Colaboradores({ usuario }) {
                 <button type="submit" disabled={salvando}
                   className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl hover:bg-green-600 disabled:opacity-50 cursor-pointer transition-colors">
                   {salvando ? 'Salvando...' : 'Cadastrar'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Editar */}
-      {modalEditar && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4">
-          <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-lg border border-gray-700 max-h-screen overflow-y-auto">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-white text-lg font-bold">Editar Colaborador</h3>
-              <button onClick={() => setModalEditar(null)}
-                className="text-gray-400 hover:text-white w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer text-2xl leading-none">✕</button>
-            </div>
-            <p className="text-gray-500 text-sm mb-5">Alterações salvas imediatamente no banco.</p>
-
-            <form onSubmit={salvarEditar} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-gray-400 text-sm mb-1">Nome completo *</label>
-                <input className={inputCls} value={formEditar.nome} onChange={e => setFormEditar({...formEditar, nome: e.target.value})} required />
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-1">CPF *</label>
-                <input className={inputCls} value={formEditar.cpf} onChange={e => setFormEditar({...formEditar, cpf: e.target.value})} required />
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-1">Email</label>
-                <input type="email" className={inputCls} value={formEditar.email} onChange={e => setFormEditar({...formEditar, email: e.target.value})} />
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-1">Telefone</label>
-                <input className={inputCls} value={formEditar.telefone} onChange={e => setFormEditar({...formEditar, telefone: e.target.value})} />
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-1">Cargo</label>
-                <select className={inputCls + ' cursor-pointer'} value={formEditar.cargo} onChange={e => setFormEditar({...formEditar, cargo: e.target.value})}>
-                  <option value="">-- Selecione --</option>
-                  {cargos.map(c => <option key={c.id} value={c.nome}>{c.nome}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-1">Data de Admissão</label>
-                <input type="date" className={inputCls + ' cursor-pointer'} value={formEditar.data_admissao}
-                  onChange={e => setFormEditar({...formEditar, data_admissao: e.target.value})} />
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-1">Chave PIX</label>
-                <input className={inputCls} placeholder="CPF, email, telefone ou chave aleatória"
-                  value={formEditar.pix} onChange={e => setFormEditar({...formEditar, pix: e.target.value})} />
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-1">Salário Fixo</label>
-                <input type="text" placeholder="R$ 0,00" className={inputCls}
-                  value={formEditar.salario_fixo} onChange={e => setFormEditar({...formEditar, salario_fixo: mascaraMoeda(e.target.value)})} />
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-1">Ajuda de Custo Mensal</label>
-                <input type="text" placeholder="R$ 0,00" className={inputCls}
-                  value={formEditar.ajuda_custo_diaria} onChange={e => setFormEditar({...formEditar, ajuda_custo_diaria: mascaraMoeda(e.target.value)})} />
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-1">
-                  Valor Hora Extra
-                  <button type="button"
-                    onClick={() => {
-                      const sal = desmascaraMoeda(formEditar.salario_fixo)
-                      if (!sal) return
-                      const diasMes = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()
-                      const valorHora = sal / diasMes / 9
-                      setFormEditar({...formEditar, hora_extra_valor: mascaraMoeda(String(Math.round(valorHora * 100)))})
-                    }}
-                    className="ml-2 text-green-400 text-xs font-normal w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-green-300">
-                    ↻ calcular automático
-                  </button>
-                </label>
-                <input type="text" placeholder="R$ 0,00" className={inputCls}
-                  value={formEditar.hora_extra_valor} onChange={e => setFormEditar({...formEditar, hora_extra_valor: mascaraMoeda(e.target.value)})} />
-                <p className="text-gray-600 text-xs mt-1">Salário ÷ dias do mês ÷ 9h</p>
-              </div>
-
-              {msgEditar && <p className="md:col-span-2 text-red-400 text-sm">{msgEditar}</p>}
-
-              <div className="md:col-span-2 flex gap-3 mt-2">
-                <button type="button" onClick={() => setModalEditar(null)}
-                  className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl hover:bg-gray-700 cursor-pointer transition-colors">Cancelar</button>
-                <button type="submit" disabled={salvandoEditar}
-                  className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl hover:bg-green-600 disabled:opacity-50 cursor-pointer transition-colors">
-                  {salvandoEditar ? 'Salvando...' : 'Salvar alterações'}
                 </button>
               </div>
             </form>
