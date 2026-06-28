@@ -127,6 +127,25 @@ export default function Cadastro({ onVoltar }) {
       setErro('⚠️ CPF já cadastrado no sistema.')
       return
     }
+
+    const { data: emailExiste } = await supabase
+      .from('colaboradores').select('id').eq('email', form.email.trim()).maybeSingle()
+    if (emailExiste) {
+      setVerificandoCPF(false)
+      triggerShake({ email: true })
+      setErro('⚠️ Email já cadastrado no sistema.')
+      return
+    }
+
+    const { data: telExiste } = await supabase
+      .from('colaboradores').select('id').eq('telefone', form.telefone.trim()).maybeSingle()
+    if (telExiste) {
+      setVerificandoCPF(false)
+      triggerShake({ telefone: true })
+      setErro('⚠️ Telefone já cadastrado no sistema.')
+      return
+    }
+
     setVerificandoCPF(false)
     setEtapa('senha')
   }

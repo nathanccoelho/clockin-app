@@ -160,13 +160,18 @@ export default function RelatorioMensal({ usuario }) {
     }
 
     function mudarMes(delta) { const d = new Date(ano, mes + delta); setMes(d.getMonth()); setAno(d.getFullYear()) }
-    function getRegistro(dia) { const s = `${ano}-${String(mes+1).padStart(2,'0')}-${String(dia).padStart(2,'0')}`; return registros.find(r => r.data === s) || null }
-    function getEvento(dia) { const s = `${ano}-${String(mes+1).padStart(2,'0')}-${String(dia).padStart(2,'0')}`; return eventos.find(e => e.data === s) || null }
-    function getSolicitacao(dia) { const s = `${ano}-${String(mes+1).padStart(2,'0')}-${String(dia).padStart(2,'0')}`; return solicitacoes.find(r => r.data === s) || null }
-    function getFalta(dia, faltasArr) { const s = `${ano}-${String(mes+1).padStart(2,'0')}-${String(dia).padStart(2,'0')}`; return (faltasArr || faltas).find(f => f.data === s) || null }
+    function getRegistro(dia) { const s = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`; return registros.find(r => r.data === s) || null }
+    function getEvento(dia) { const s = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`; return eventos.find(e => e.data === s) || null }
+    function getSolicitacao(dia) { const s = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`; return solicitacoes.find(r => r.data === s) || null }
+    function getFalta(dia, faltasArr) { const s = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`; return (faltasArr || faltas).find(f => f.data === s) || null }
     function ehUtil(dia) { const d = new Date(ano, mes, dia).getDay(); return d !== 0 && d !== 6 }
-    function ehPassado(dia) { const d = new Date(ano, mes, dia); const o = new Date(); o.setDate(o.getDate()-1); o.setHours(23,59,59); return d <= o }
-    function horaFmt(iso) { if (!iso) return '--:--'; if (iso.length <= 8) return iso.slice(0,5); return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }
+    function ehPassado(dia) {
+        const d = new Date(ano, mes, dia)
+        const o = new Date()
+        o.setHours(23, 59, 59)
+        return d <= o
+    }
+    function horaFmt(iso) { if (!iso) return '--:--'; if (iso.length <= 8) return iso.slice(0, 5); return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }
     function brl(v) { return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
 
     function valorParaTipo(tipo, colab) {
@@ -209,7 +214,7 @@ export default function RelatorioMensal({ usuario }) {
 
     async function sincronizarFaltas(colabId, regsC, faltasC) {
         for (let d = 1; d <= diasNoMes; d++) {
-            const dataStr = `${ano}-${String(mes+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+            const dataStr = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
             const dow = new Date(ano, mes, d).getDay()
             const passado = new Date(ano, mes, d) <= new Date()
             if (dow !== 0 && dow !== 6 && passado) {
@@ -262,12 +267,29 @@ export default function RelatorioMensal({ usuario }) {
     }
 
     async function salvarEvento() {
-        if (!formEvento.tipo || !formEvento.valor) return
+        if (!isAdmin && formEvento.tipo !== 'dia_normal' && !formEvento.valor) return
         setSalvandoEvento(true)
         const colabId = isAdmin ? colaboradorSel?.id : usuario.id
-        const payload = { colaborador_id: colabId, empresa_id: usuario.empresa_id, data: modalEvento.data, tipo: formEvento.tipo, descricao: formEvento.descricao.trim() || null, valor: desmascaraMoeda(formEvento.valor), status: isAdmin ? 'aprovado' : 'pendente', criado_por: isAdmin ? 'admin' : 'colaborador' }
-        if (modalEvento.eventoExistente) await supabase.from('eventos').update(payload).eq('id', modalEvento.eventoExistente.id)
-        else await supabase.from('eventos').insert(payload)
+
+        // Se não é dia_normal, salva o evento
+        if (formEvento.tipo !== 'dia_normal') {
+            const payload = { colaborador_id: colabId, empresa_id: usuario.empresa_id, data: modalEvento.data, tipo: formEvento.tipo, descricao: formEvento.descricao.trim() || null, valor: desmascaraMoeda(formEvento.valor), status: isAdmin ? 'aprovado' : 'pendente', criado_por: isAdmin ? 'admin' : 'colaborador' }
+            if (modalEvento.eventoExistente) await supabase.from('eventos').update(payload).eq('id', modalEvento.eventoExistente.id)
+            else await supabase.from('eventos').insert(payload)
+        }
+
+        // Se colaborador informou horário (dia_normal ou junto com evento), salva solicitação de ponto
+        if (!isAdmin && (formEvento.entrada || formEvento.saida)) {
+            const justificativa = formEvento.tipo === 'dia_normal'
+                ? 'Correção de horário solicitada pelo colaborador'
+                : `Horário informado junto ao evento (${TIPOS_EVENTO.find(t => t.value === formEvento.tipo)?.label || formEvento.tipo})`
+            await supabase.from('solicitacoes_correcao').upsert({
+                colaborador_id: colabId, empresa_id: usuario.empresa_id, data: modalEvento.data,
+                entrada_solicitada: formEvento.entrada || null, saida_solicitada: formEvento.saida || null,
+                justificativa, status: 'pendente'
+            }, { onConflict: 'colaborador_id,data' })
+        }
+
         setSalvandoEvento(false); setModalEvento(null); carregar(colabId); if (isAdmin) carregarFechamento()
     }
 
@@ -313,87 +335,87 @@ export default function RelatorioMensal({ usuario }) {
     async function exportarXlsx(colabsIds, mesEx, anoEx) {
         setExportando(true)
         const diasMes = new Date(anoEx, mesEx + 1, 0).getDate()
-        const inicio = `${anoEx}-${String(mesEx+1).padStart(2,'0')}-01`
-        const fim = `${anoEx}-${String(mesEx+1).padStart(2,'0')}-${diasMes}`
+        const inicio = `${anoEx}-${String(mesEx + 1).padStart(2, '0')}-01`
+        const fim = `${anoEx}-${String(mesEx + 1).padStart(2, '0')}-${diasMes}`
         const mesNome = new Date(anoEx, mesEx).toLocaleDateString('pt-BR', { month: 'long' })
-        const diasSemana = ['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado']
+        const diasSemana = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado']
         const colabsEx = colaboradores.filter(c => colabsIds.includes(c.id))
         const [{ data: regsEx }, { data: lancsEx }, { data: evsEx }, { data: ftsEx }] = await Promise.all([
             supabase.from('registros_ponto').select('*').in('colaborador_id', colabsIds).gte('data', inicio).lte('data', fim),
-            supabase.from('lancamentos').select('*').in('colaborador_id', colabsIds).eq('mes', mesEx+1).eq('ano', anoEx),
+            supabase.from('lancamentos').select('*').in('colaborador_id', colabsIds).eq('mes', mesEx + 1).eq('ano', anoEx),
             supabase.from('eventos').select('*').in('colaborador_id', colabsIds).gte('data', inicio).lte('data', fim).eq('status', 'aprovado'),
             supabase.from('faltas').select('*').in('colaborador_id', colabsIds).gte('data', inicio).lte('data', fim),
         ])
         const wb = XLSX.utils.book_new()
         for (const colab of colabsEx) {
-            const regsC=(regsEx||[]).filter(r=>r.colaborador_id===colab.id)
-            const lancsC=(lancsEx||[]).filter(l=>l.colaborador_id===colab.id)
-            const evsC=(evsEx||[]).filter(e=>e.colaborador_id===colab.id)
-            const ftsC=(ftsEx||[]).filter(f=>f.colaborador_id===colab.id)
-            const calc=calcularTotal(colab,regsC,lancsC,evsC,ftsC)
-            const rows=[['DATA','DIA','STATUS','TIPO','DESCRIÇÃO','','ENTRADA','SAÍDA','HORAS']]
-            for(let d=1;d<=diasMes;d++){
-                const dataStr=`${anoEx}-${String(mesEx+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
-                const dow=new Date(anoEx,mesEx,d).getDay()
-                const reg=regsC.find(r=>r.data===dataStr); const ev=evsC.find(e=>e.data===dataStr); const ft=ftsC.find(f=>f.data===dataStr)
-                let horas='00:00'
-                if(reg?.horas_trabalhadas){const h=Math.floor(reg.horas_trabalhadas);const m=Math.round((reg.horas_trabalhadas%1)*60);horas=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`}
-                rows.push([dataStr,diasSemana[dow],reg?.entrada?'Sim':(ft?.status==='falta'?'FALTA':ft?.status==='abonada'?'Abonada':''),ev?(TIPOS_EVENTO.find(t=>t.value===ev.tipo)?.label||ev.tipo):'',ev?.descricao||'','',reg?.entrada?horaFmt(reg.entrada):'',reg?.saida?horaFmt(reg.saida):'',horas])
+            const regsC = (regsEx || []).filter(r => r.colaborador_id === colab.id)
+            const lancsC = (lancsEx || []).filter(l => l.colaborador_id === colab.id)
+            const evsC = (evsEx || []).filter(e => e.colaborador_id === colab.id)
+            const ftsC = (ftsEx || []).filter(f => f.colaborador_id === colab.id)
+            const calc = calcularTotal(colab, regsC, lancsC, evsC, ftsC)
+            const rows = [['DATA', 'DIA', 'STATUS', 'TIPO', 'DESCRIÇÃO', '', 'ENTRADA', 'SAÍDA', 'HORAS']]
+            for (let d = 1; d <= diasMes; d++) {
+                const dataStr = `${anoEx}-${String(mesEx + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+                const dow = new Date(anoEx, mesEx, d).getDay()
+                const reg = regsC.find(r => r.data === dataStr); const ev = evsC.find(e => e.data === dataStr); const ft = ftsC.find(f => f.data === dataStr)
+                let horas = '00:00'
+                if (reg?.horas_trabalhadas) { const h = Math.floor(reg.horas_trabalhadas); const m = Math.round((reg.horas_trabalhadas % 1) * 60); horas = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}` }
+                rows.push([dataStr, diasSemana[dow], reg?.entrada ? 'Sim' : (ft?.status === 'falta' ? 'FALTA' : ft?.status === 'abonada' ? 'Abonada' : ''), ev ? (TIPOS_EVENTO.find(t => t.value === ev.tipo)?.label || ev.tipo) : '', ev?.descricao || '', '', reg?.entrada ? horaFmt(reg.entrada) : '', reg?.saida ? horaFmt(reg.saida) : '', horas])
             }
-            const ws=XLSX.utils.aoa_to_sheet(rows)
-            const linhaBase=diasMes+3
-            const fin=[
-                ['RESUMO FINANCEIRO','','','QTD','VALOR UNIT.','TOTAL'],
-                ['Salário Fixo','','',1,calc.salario,calc.salario],
-                ['Ajuda de Custo','','',1,calc.ajuda,calc.ajuda],
-                ['Cachê','','',calc.nCache,calc.nCache?calc.cache/calc.nCache:0,calc.cache],
-                ['Meio Cachê','','',calc.nMCache,calc.nMCache?calc.mCache/calc.nMCache:0,calc.mCache],
-                ['Dia Trabalhado','','',calc.nDiaTrab,calc.nDiaTrab?calc.diaTrab/calc.nDiaTrab:0,calc.diaTrab],
-                ['Feriado Trabalhado','','',calc.nFerTrab,calc.nFerTrab?calc.ferTrab/calc.nFerTrab:0,calc.ferTrab],
-                ['Férias','','','','',calc.fer],['Décimo Terceiro','','','','',calc.dec],
-                ['Bônus','','','','',calc.bonus],['Ajuda Moradia','','','','',calc.moradia],
-                ['Horas Extra','','','','',calc.hExtra],['','','','','',''],
-                ['TOTAL BRUTO','','','','',calc.salario+calc.ajuda+calc.cache+calc.mCache+calc.diaTrab+calc.ferTrab+calc.fer+calc.dec+calc.bonus+calc.moradia+calc.hExtra],
-                ['','','','','',''],['DESCONTOS','','','QTD','VALOR UNIT.','TOTAL'],
-                ['Faltas','','',calc.faltasNaoAbonadas,calc.diasUteisMes>0?calc.salario/calc.diasUteisMes:0,-calc.descontoFalta],
-                ['Adiantamento','','','','', -calc.adiant],['Desconto','','','','', -calc.desc],
-                ['TOTAL DESCONTOS','','','','', -(calc.descontoFalta+calc.adiant+calc.desc)],
-                ['','','','','',''],['TOTAL LÍQUIDO','','','','',calc.total],
-                ['','','','','',''],['DADOS BANCÁRIOS','','','','',''],
-                ['Banco','','','','',colab.banco||''],['Agência','','','','',colab.agencia||''],
-                ['Conta','','','','',colab.conta||''],['PIX','','','','',colab.pix||''],
+            const ws = XLSX.utils.aoa_to_sheet(rows)
+            const linhaBase = diasMes + 3
+            const fin = [
+                ['RESUMO FINANCEIRO', '', '', 'QTD', 'VALOR UNIT.', 'TOTAL'],
+                ['Salário Fixo', '', '', 1, calc.salario, calc.salario],
+                ['Ajuda de Custo', '', '', 1, calc.ajuda, calc.ajuda],
+                ['Cachê', '', '', calc.nCache, calc.nCache ? calc.cache / calc.nCache : 0, calc.cache],
+                ['Meio Cachê', '', '', calc.nMCache, calc.nMCache ? calc.mCache / calc.nMCache : 0, calc.mCache],
+                ['Dia Trabalhado', '', '', calc.nDiaTrab, calc.nDiaTrab ? calc.diaTrab / calc.nDiaTrab : 0, calc.diaTrab],
+                ['Feriado Trabalhado', '', '', calc.nFerTrab, calc.nFerTrab ? calc.ferTrab / calc.nFerTrab : 0, calc.ferTrab],
+                ['Férias', '', '', '', '', calc.fer], ['Décimo Terceiro', '', '', '', '', calc.dec],
+                ['Bônus', '', '', '', '', calc.bonus], ['Ajuda Moradia', '', '', '', '', calc.moradia],
+                ['Horas Extra', '', '', '', '', calc.hExtra], ['', '', '', '', '', ''],
+                ['TOTAL BRUTO', '', '', '', '', calc.salario + calc.ajuda + calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia + calc.hExtra],
+                ['', '', '', '', '', ''], ['DESCONTOS', '', '', 'QTD', 'VALOR UNIT.', 'TOTAL'],
+                ['Faltas', '', '', calc.faltasNaoAbonadas, calc.diasUteisMes > 0 ? calc.salario / calc.diasUteisMes : 0, -calc.descontoFalta],
+                ['Adiantamento', '', '', '', '', -calc.adiant], ['Desconto', '', '', '', '', -calc.desc],
+                ['TOTAL DESCONTOS', '', '', '', '', -(calc.descontoFalta + calc.adiant + calc.desc)],
+                ['', '', '', '', '', ''], ['TOTAL LÍQUIDO', '', '', '', '', calc.total],
+                ['', '', '', '', '', ''], ['DADOS BANCÁRIOS', '', '', '', '', ''],
+                ['Banco', '', '', '', '', colab.banco || ''], ['Agência', '', '', '', '', colab.agencia || ''],
+                ['Conta', '', '', '', '', colab.conta || ''], ['PIX', '', '', '', '', colab.pix || ''],
             ]
-            fin.forEach((row,i)=>{row.forEach((val,j)=>{const cell=XLSX.utils.encode_cell({r:linhaBase+i,c:j});ws[cell]={v:val,t:typeof val==='number'?'n':'s'}})})
-            const ref=XLSX.utils.decode_range(ws['!ref']||`A1:I${diasMes+1}`)
-            ref.e.r=Math.max(ref.e.r,linhaBase+fin.length);ref.e.c=Math.max(ref.e.c,5)
-            ws['!ref']=XLSX.utils.encode_range(ref)
-            ws['!cols']=[{wch:12},{wch:14},{wch:12},{wch:18},{wch:20},{wch:2},{wch:9},{wch:9},{wch:10}]
-            XLSX.utils.book_append_sheet(wb,ws,colab.nome.substring(0,31))
+            fin.forEach((row, i) => { row.forEach((val, j) => { const cell = XLSX.utils.encode_cell({ r: linhaBase + i, c: j }); ws[cell] = { v: val, t: typeof val === 'number' ? 'n' : 's' } }) })
+            const ref = XLSX.utils.decode_range(ws['!ref'] || `A1:I${diasMes + 1}`)
+            ref.e.r = Math.max(ref.e.r, linhaBase + fin.length); ref.e.c = Math.max(ref.e.c, 5)
+            ws['!ref'] = XLSX.utils.encode_range(ref)
+            ws['!cols'] = [{ wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 20 }, { wch: 2 }, { wch: 9 }, { wch: 9 }, { wch: 10 }]
+            XLSX.utils.book_append_sheet(wb, ws, colab.nome.substring(0, 31))
         }
-        if(colabsEx.length>1){
-            const rowsGeral=[['COLABORADOR','CARGO','BANCO','PIX','DIAS','HORAS','SALÁRIO','AJUDA','CACHÊS/EXTRAS','H.EXTRA','FALTAS','DESCONTOS','TOTAL LÍQUIDO']]
-            colabsEx.forEach(c=>{
-                const regsC=(regsEx||[]).filter(r=>r.colaborador_id===c.id);const lancsC=(lancsEx||[]).filter(l=>l.colaborador_id===c.id)
-                const evsC=(evsEx||[]).filter(e=>e.colaborador_id===c.id);const ftsC=(ftsEx||[]).filter(f=>f.colaborador_id===c.id)
-                const calc=calcularTotal(c,regsC,lancsC,evsC,ftsC)
-                rowsGeral.push([c.nome,c.cargo||'',`${c.banco||''} Ag:${c.agencia||''} Cc:${c.conta||''}`,c.pix||'',calc.dias,Number(calc.horas.toFixed(1)),calc.salario,calc.ajuda,calc.cache+calc.mCache+calc.diaTrab+calc.ferTrab+calc.fer+calc.dec+calc.bonus+calc.moradia,calc.hExtra,-calc.descontoFalta,-(calc.adiant+calc.desc),calc.total])
+        if (colabsEx.length > 1) {
+            const rowsGeral = [['COLABORADOR', 'CARGO', 'BANCO', 'PIX', 'DIAS', 'HORAS', 'SALÁRIO', 'AJUDA', 'CACHÊS/EXTRAS', 'H.EXTRA', 'FALTAS', 'DESCONTOS', 'TOTAL LÍQUIDO']]
+            colabsEx.forEach(c => {
+                const regsC = (regsEx || []).filter(r => r.colaborador_id === c.id); const lancsC = (lancsEx || []).filter(l => l.colaborador_id === c.id)
+                const evsC = (evsEx || []).filter(e => e.colaborador_id === c.id); const ftsC = (ftsEx || []).filter(f => f.colaborador_id === c.id)
+                const calc = calcularTotal(c, regsC, lancsC, evsC, ftsC)
+                rowsGeral.push([c.nome, c.cargo || '', `${c.banco || ''} Ag:${c.agencia || ''} Cc:${c.conta || ''}`, c.pix || '', calc.dias, Number(calc.horas.toFixed(1)), calc.salario, calc.ajuda, calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia, calc.hExtra, -calc.descontoFalta, -(calc.adiant + calc.desc), calc.total])
             })
-            const wsGeral=XLSX.utils.aoa_to_sheet(rowsGeral)
-            wsGeral['!cols']=[{wch:22},{wch:18},{wch:28},{wch:20},{wch:6},{wch:7},{wch:12},{wch:10},{wch:14},{wch:8},{wch:10},{wch:10},{wch:14}]
-            XLSX.utils.book_append_sheet(wb,wsGeral,'Geral')
+            const wsGeral = XLSX.utils.aoa_to_sheet(rowsGeral)
+            wsGeral['!cols'] = [{ wch: 22 }, { wch: 18 }, { wch: 28 }, { wch: 20 }, { wch: 6 }, { wch: 7 }, { wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 14 }]
+            XLSX.utils.book_append_sheet(wb, wsGeral, 'Geral')
         }
-        XLSX.writeFile(wb,`relatorio_${mesNome}_${anoEx}.xlsx`)
+        XLSX.writeFile(wb, `relatorio_${mesNome}_${anoEx}.xlsx`)
         setExportando(false); setModalExport(false)
     }
 
     function clicarDia(dia) {
-        const dataStr = `${ano}-${String(mes+1).padStart(2,'0')}-${String(dia).padStart(2,'0')}`
+        const dataStr = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
         const ev = getEvento(dia); const falta = getFalta(dia, faltas)
         const colab = isAdmin ? colaboradorSel : (colaboradores.find(c => c.id === usuario.id) || usuario)
         if (isAdmin && falta) { setModalAbono({ falta }); setJustAbono(falta.justificativa || ''); setAbaAbono('abonar'); setFormPontoFalta({ entrada: '', saida: '' }); setFormEventoFalta({ tipo: 'cache', descricao: '', valor: valorParaTipo('cache', colaboradorSel) }); return }
-        const tipoInicial = 'cache'
-        if (isAdmin) { setFormEvento({ tipo: ev?.tipo || tipoInicial, descricao: ev?.descricao || '', valor: ev?.valor ? numParaMoeda(ev.valor) : valorParaTipo(tipoInicial, colab) }); setModalEvento({ dia, data: dataStr, eventoExistente: ev || null }) }
-        else { if (ev) { setFormEvento({ tipo: ev.tipo, descricao: ev.descricao || '', valor: numParaMoeda(ev.valor) }); setModalEvento({ dia, data: dataStr, eventoExistente: ev }) } else { setFormEvento({ tipo: tipoInicial, descricao: '', valor: valorParaTipo(tipoInicial, colab) }); setModalEvento({ dia, data: dataStr, eventoExistente: null }) } }
+        const tipoInicial = isAdmin ? 'cache' : 'dia_normal'
+        if (isAdmin) { setFormEvento({ tipo: ev?.tipo || 'cache', descricao: ev?.descricao || '', valor: ev?.valor ? numParaMoeda(ev.valor) : valorParaTipo('cache', colab), entrada: '', saida: '' }); setModalEvento({ dia, data: dataStr, eventoExistente: ev || null }) }
+        else { if (ev) { setFormEvento({ tipo: ev.tipo, descricao: ev.descricao || '', valor: numParaMoeda(ev.valor), entrada: '', saida: '' }); setModalEvento({ dia, data: dataStr, eventoExistente: ev }) } else { setFormEvento({ tipo: tipoInicial, descricao: '', valor: '', entrada: '', saida: '' }); setModalEvento({ dia, data: dataStr, eventoExistente: null }) } }
     }
 
     function mudarTipoEvento(tipo) { const colab = isAdmin ? colaboradorSel : usuario; setFormEvento(f => ({ ...f, tipo, valor: valorParaTipo(tipo, colab) })) }
@@ -491,8 +513,8 @@ export default function RelatorioMensal({ usuario }) {
                             const calc = calcularTotal(colaboradorSel, regsC, lancsC, evsC, ftsC)
                             return (
                                 <div className="flex flex-wrap gap-3 border-t border-gray-700 pt-2 mt-1 w-full">
-                                    <span className="text-gray-400">Total bruto: <span className="text-green-400 font-bold">{brl(calc.salario+calc.ajuda+calc.cache+calc.mCache+calc.diaTrab+calc.ferTrab+calc.fer+calc.dec+calc.bonus+calc.moradia+calc.hExtra)}</span></span>
-                                    <span className="text-gray-400">Descontos: <span className="text-red-400 font-bold">-{brl(calc.descontoFalta+calc.adiant+calc.desc)}</span></span>
+                                    <span className="text-gray-400">Total bruto: <span className="text-green-400 font-bold">{brl(calc.salario + calc.ajuda + calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia + calc.hExtra)}</span></span>
+                                    <span className="text-gray-400">Descontos: <span className="text-red-400 font-bold">-{brl(calc.descontoFalta + calc.adiant + calc.desc)}</span></span>
                                     <span className="text-gray-400">Total líquido: <span className="text-white font-bold">{brl(calc.total)}</span></span>
                                 </div>
                             )
@@ -515,11 +537,11 @@ export default function RelatorioMensal({ usuario }) {
                 </div>
                 {loading ? <p className="text-gray-500 text-center py-8">Carregando...</p> : (
                     <>
-                        <div className="grid grid-cols-7 gap-1 mb-1">{['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'].map(d => <div key={d} className="text-center text-gray-500 text-xs py-1">{d}</div>)}</div>
+                        <div className="grid grid-cols-7 gap-1 mb-1">{['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(d => <div key={d} className="text-center text-gray-500 text-xs py-1">{d}</div>)}</div>
                         <div className="grid grid-cols-7 gap-1">
-                            {Array.from({ length: primeiroDiaSemana }).map((_,i) => <div key={`v${i}`} />)}
-                            {Array.from({ length: diasNoMes }).map((_,i) => {
-                                const dia = i+1
+                            {Array.from({ length: primeiroDiaSemana }).map((_, i) => <div key={`v${i}`} />)}
+                            {Array.from({ length: diasNoMes }).map((_, i) => {
+                                const dia = i + 1
                                 const reg = getRegistro(dia); const ev = getEvento(dia); const sol = getSolicitacao(dia); const falta = getFalta(dia, faltas)
                                 const util = ehUtil(dia); const passado = ehPassado(dia)
                                 const isHoje = dia === hoje.getDate() && mes === hoje.getMonth() && ano === hoje.getFullYear()
@@ -539,8 +561,8 @@ export default function RelatorioMensal({ usuario }) {
                                         {falta?.status === 'abonada' && <p className="text-white text-[8px]">abonada</p>}
                                         {!falta && ev?.status === 'aprovado' && <p className="text-[8px] leading-tight truncate text-white">{ev.descricao || TIPOS_EVENTO.find(t => t.value === ev.tipo)?.label}</p>}
                                         {!falta && ev?.status === 'pendente' && <p className="text-yellow-400 text-[8px]">pend.</p>}
-                                        {!ev && !falta && reg?.entrada && <p className="text-green-400 text-[9px] leading-tight">{horaFmt(reg.entrada)}</p>}
-                                        {!ev && !falta && reg?.saida && <p className="text-red-400 text-[9px] leading-tight">{horaFmt(reg.saida)}</p>}
+                                        {!ev && !falta && reg?.entrada && <p className="text-white text-[9px] leading-tight">{horaFmt(reg.entrada)}</p>}
+                                        {!ev && !falta && reg?.saida && <p className="text-white text-[9px] leading-tight">{horaFmt(reg.saida)}</p>}
                                         {sol && <div className={`absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full ${sol.status === 'aprovado' ? 'bg-green-400' : sol.status === 'recusado' ? 'bg-red-400' : 'bg-yellow-400'}`} />}
                                     </div>
                                 )
@@ -567,7 +589,7 @@ export default function RelatorioMensal({ usuario }) {
                     <div className="space-y-2">
                         {eventosParaAprovar.map(ev => (
                             <div key={ev.id} className="flex items-center justify-between bg-gray-800 rounded-xl px-4 py-3">
-                                <div><p className="text-white text-sm font-semibold">{ev.colaboradores?.nome} — {new Date(ev.data+'T12:00:00').toLocaleDateString('pt-BR')}</p><p className="text-gray-400 text-xs">{TIPOS_EVENTO.find(t=>t.value===ev.tipo)?.label} {ev.descricao?`— ${ev.descricao}`:''} · {brl(ev.valor)}</p></div>
+                                <div><p className="text-white text-sm font-semibold">{ev.colaboradores?.nome} — {new Date(ev.data + 'T12:00:00').toLocaleDateString('pt-BR')}</p><p className="text-gray-400 text-xs">{TIPOS_EVENTO.find(t => t.value === ev.tipo)?.label} {ev.descricao ? `— ${ev.descricao}` : ''} · {brl(ev.valor)}</p></div>
                                 <div className="flex gap-2">
                                     <button onClick={() => aprovarEvento(ev.id)} className="bg-green-500 text-white text-xs font-bold px-3 py-1.5 rounded-lg cursor-pointer hover:bg-green-600 transition-colors border-0 shadow-none w-auto">✓</button>
                                     <button onClick={() => recusarEvento(ev.id)} className="bg-gray-700 text-gray-300 text-xs font-bold px-3 py-1.5 rounded-lg cursor-pointer hover:bg-gray-600 transition-colors border-0 shadow-none w-auto">✕</button>
@@ -584,13 +606,13 @@ export default function RelatorioMensal({ usuario }) {
                     <h3 className="text-white font-bold mb-4">Lançamentos — {colaboradorSel?.nome}</h3>
                     <div className="space-y-2">
                         {lancamentos.map(l => {
-                            const isCredito = l.tipo==='ferias'||l.tipo==='decimo_terceiro'||l.tipo==='bonus'||l.tipo==='ajuda_moradia'
-                            const label = [...TIPOS_DEBITO,...TIPOS_CREDITO].find(t=>t.value===l.tipo)?.label||l.tipo
+                            const isCredito = l.tipo === 'ferias' || l.tipo === 'decimo_terceiro' || l.tipo === 'bonus' || l.tipo === 'ajuda_moradia'
+                            const label = [...TIPOS_DEBITO, ...TIPOS_CREDITO].find(t => t.value === l.tipo)?.label || l.tipo
                             return (
                                 <div key={l.id} className="flex items-center justify-between bg-gray-800 rounded-xl px-4 py-3">
-                                    <div><p className="text-white text-sm font-semibold">{label}{l.parcelas>1&&<span className="text-gray-500 text-xs ml-2">({l.parcela_atual}/{l.parcelas})</span>}</p>{l.descricao&&<p className="text-gray-400 text-xs">{l.descricao}</p>}</div>
+                                    <div><p className="text-white text-sm font-semibold">{label}{l.parcelas > 1 && <span className="text-gray-500 text-xs ml-2">({l.parcela_atual}/{l.parcelas})</span>}</p>{l.descricao && <p className="text-gray-400 text-xs">{l.descricao}</p>}</div>
                                     <div className="flex items-center gap-3">
-                                        <p className={`font-bold text-sm ${isCredito?'text-green-400':'text-red-400'}`}>{isCredito?'+':'-'}{brl(Number(l.valor)*Number(l.quantidade||1))}</p>
+                                        <p className={`font-bold text-sm ${isCredito ? 'text-green-400' : 'text-red-400'}`}>{isCredito ? '+' : '-'}{brl(Number(l.valor) * Number(l.quantidade || 1))}</p>
                                         <button onClick={() => excluirLancamento(l.id)} className="text-gray-600 hover:text-red-400 cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none transition-colors text-xl">×</button>
                                     </div>
                                 </div>
@@ -607,8 +629,8 @@ export default function RelatorioMensal({ usuario }) {
                     <div className="space-y-2">
                         {registros.map(r => (
                             <div key={r.id} className="flex items-center justify-between bg-gray-800 rounded-xl px-4 py-3">
-                                <div><p className="text-white text-sm font-semibold">{new Date(r.data+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short',day:'numeric',month:'short'})}</p><p className="text-gray-400 text-xs mt-0.5"><span className="text-green-400">{horaFmt(r.entrada)}</span>{' → '}<span className={r.saida?'text-red-400':'text-gray-500'}>{horaFmt(r.saida)}</span></p></div>
-                                <div className="text-right">{r.horas_trabalhadas?<p className="text-white font-bold text-sm">{Number(r.horas_trabalhadas).toFixed(1)}h</p>:<p className="text-gray-500 text-xs">Em aberto</p>}</div>
+                                <div><p className="text-white text-sm font-semibold">{new Date(r.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' })}</p><p className="text-gray-400 text-xs mt-0.5"><span className="text-green-400">{horaFmt(r.entrada)}</span>{' → '}<span className={r.saida ? 'text-red-400' : 'text-gray-500'}>{horaFmt(r.saida)}</span></p></div>
+                                <div className="text-right">{r.horas_trabalhadas ? <p className="text-white font-bold text-sm">{Number(r.horas_trabalhadas).toFixed(1)}h</p> : <p className="text-gray-500 text-xs">Em aberto</p>}</div>
                             </div>
                         ))}
                     </div>
@@ -620,15 +642,17 @@ export default function RelatorioMensal({ usuario }) {
                 <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
                     <h3 className="text-white font-bold mb-4">Meus eventos</h3>
                     <div className="space-y-2">
-                        {eventos.map(ev => { const cor=corEvento(ev.tipo); return (
-                            <div key={ev.id} className={`flex items-center justify-between rounded-xl px-4 py-3 ${cor.bg}`}>
-                                <div><p className={`text-sm font-semibold text-white`}>{new Date(ev.data+'T12:00:00').toLocaleDateString('pt-BR',{day:'numeric',month:'short'})} — {TIPOS_EVENTO.find(t=>t.value===ev.tipo)?.label}{ev.descricao&&<span className="text-gray-300 font-normal"> — {ev.descricao}</span>}</p></div>
-                                <div className="flex items-center gap-2">
-                                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ev.status==='aprovado'?'bg-green-500 bg-opacity-20 text-green-400':ev.status==='recusado'?'bg-red-500 bg-opacity-20 text-red-400':'bg-yellow-500 bg-opacity-20 text-yellow-400'}`}>{ev.status==='aprovado'?'✓':ev.status==='recusado'?'✗':'⏳'}</span>
-                                    <p className="font-bold text-sm text-white">{brl(ev.valor)}</p>
+                        {eventos.map(ev => {
+                            const cor = corEvento(ev.tipo); return (
+                                <div key={ev.id} className={`flex items-center justify-between rounded-xl px-4 py-3 ${cor.bg}`}>
+                                    <div><p className={`text-sm font-semibold text-white`}>{new Date(ev.data + 'T12:00:00').toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' })} — {TIPOS_EVENTO.find(t => t.value === ev.tipo)?.label}{ev.descricao && <span className="text-gray-300 font-normal"> — {ev.descricao}</span>}</p></div>
+                                    <div className="flex items-center gap-2">
+                                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ev.status === 'aprovado' ? 'bg-green-500 bg-opacity-20 text-green-400' : ev.status === 'recusado' ? 'bg-red-500 bg-opacity-20 text-red-400' : 'bg-yellow-500 bg-opacity-20 text-yellow-400'}`}>{ev.status === 'aprovado' ? '✓' : ev.status === 'recusado' ? '✗' : '⏳'}</span>
+                                        <p className="font-bold text-sm text-white">{brl(ev.valor)}</p>
+                                    </div>
                                 </div>
-                            </div>
-                        )})}
+                            )
+                        })}
                     </div>
                 </div>
             )}
@@ -641,59 +665,59 @@ export default function RelatorioMensal({ usuario }) {
                 <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
                     <div className="flex items-center justify-between mb-2">
                         <div><h3 className="text-white font-bold text-lg">Fechamento do Mês</h3><p className="text-gray-500 text-xs mt-0.5 capitalize">{nomeMes}</p></div>
-                        {todoAprovado && <button onClick={() => exportarXlsx(colaboradores.map(c=>c.id),mes,ano)} disabled={exportando} className="bg-green-500 text-white font-bold py-2 px-5 rounded-xl hover:bg-green-600 cursor-pointer transition-colors text-sm w-auto disabled:opacity-50">{exportando?'Gerando...':'⬇ Exportar Fechamento'}</button>}
+                        {todoAprovado && <button onClick={() => exportarXlsx(colaboradores.map(c => c.id), mes, ano)} disabled={exportando} className="bg-green-500 text-white font-bold py-2 px-5 rounded-xl hover:bg-green-600 cursor-pointer transition-colors text-sm w-auto disabled:opacity-50">{exportando ? 'Gerando...' : '⬇ Exportar Fechamento'}</button>}
                     </div>
-                    {!todoAprovado && <p className="text-yellow-400 text-xs mb-4">{fechamentos.filter(f=>f.aprovado).length}/{colaboradores.length} aprovados</p>}
+                    {!todoAprovado && <p className="text-yellow-400 text-xs mb-4">{fechamentos.filter(f => f.aprovado).length}/{colaboradores.length} aprovados</p>}
                     {loadingFechamento ? <p className="text-gray-500 text-center py-6">Carregando...</p> : (
                         <div className="space-y-3 mt-4">
                             {colaboradores.map(colab => {
-                                const regsC=todosRegs.filter(r=>r.colaborador_id===colab.id)
-                                const lancsC=todosLancs.filter(l=>l.colaborador_id===colab.id)
-                                const evsC=todosEventos.filter(e=>e.colaborador_id===colab.id)
-                                const ftsC=todasFaltas.filter(f=>f.colaborador_id===colab.id)
-                                const evsAprov=evsC.filter(e=>e.status==='aprovado')
-                                const evsPend=evsC.filter(e=>e.status==='pendente')
-                                const faltasAtivas=ftsC.filter(f=>f.status==='falta')
-                                const calc=calcularTotal(colab,regsC,lancsC,evsC,ftsC)
-                                const fech=fechamentos.find(f=>f.colaborador_id===colab.id)
-                                const aprovado=fech?.aprovado||false
-                                const aberto=expandido===colab.id
+                                const regsC = todosRegs.filter(r => r.colaborador_id === colab.id)
+                                const lancsC = todosLancs.filter(l => l.colaborador_id === colab.id)
+                                const evsC = todosEventos.filter(e => e.colaborador_id === colab.id)
+                                const ftsC = todasFaltas.filter(f => f.colaborador_id === colab.id)
+                                const evsAprov = evsC.filter(e => e.status === 'aprovado')
+                                const evsPend = evsC.filter(e => e.status === 'pendente')
+                                const faltasAtivas = ftsC.filter(f => f.status === 'falta')
+                                const calc = calcularTotal(colab, regsC, lancsC, evsC, ftsC)
+                                const fech = fechamentos.find(f => f.colaborador_id === colab.id)
+                                const aprovado = fech?.aprovado || false
+                                const aberto = expandido === colab.id
                                 return (
-                                    <div key={colab.id} className={`rounded-2xl border transition-all ${aprovado?'border-green-500 border-opacity-60 bg-gray-800':'border-gray-700 bg-gray-800'}`}>
-                                        <div className="flex items-center gap-3 p-4 cursor-pointer" onClick={() => setExpandido(aberto?null:colab.id)}>
+                                    <div key={colab.id} className={`rounded-2xl border transition-all ${aprovado ? 'border-green-500 border-opacity-60 bg-gray-800' : 'border-gray-700 bg-gray-800'}`}>
+                                        <div className="flex items-center gap-3 p-4 cursor-pointer" onClick={() => setExpandido(aberto ? null : colab.id)}>
                                             <div className="flex-1">
                                                 <div className="flex items-center gap-2 flex-wrap">
                                                     <p className="text-white font-bold text-sm">{colab.nome}</p>
                                                     {aprovado && <span className="text-xs font-bold text-white bg-green-500 px-2 py-0.5 rounded-full">✓ Aprovado</span>}
                                                     {evsPend.length > 0 && <span className="text-xs font-bold text-yellow-400 bg-yellow-500 bg-opacity-20 px-2 py-0.5 rounded-full">⏳ {evsPend.length}</span>}
-                                                    {faltasAtivas.length > 0 && <span className="text-xs font-bold text-white bg-red-500 px-2 py-0.5 rounded-full">⚠ {faltasAtivas.length} falta{faltasAtivas.length>1?'s':''}</span>}
+                                                    {faltasAtivas.length > 0 && <span className="text-xs font-bold text-white bg-red-500 px-2 py-0.5 rounded-full">⚠ {faltasAtivas.length} falta{faltasAtivas.length > 1 ? 's' : ''}</span>}
                                                 </div>
-                                                <p className="text-gray-400 text-xs">{colab.cargo||'—'} · {calc.dias} dias · {calc.horas.toFixed(1)}h</p>
+                                                <p className="text-gray-400 text-xs">{colab.cargo || '—'} · {calc.dias} dias · {calc.horas.toFixed(1)}h</p>
                                             </div>
                                             <div className="text-right mr-2"><p className="text-white font-bold">{brl(calc.total)}</p><p className="text-gray-500 text-xs">total líquido</p></div>
-                                            <span className={`text-gray-400 text-lg transition-transform ${aberto?'rotate-90':''}`}>›</span>
+                                            <span className={`text-gray-400 text-lg transition-transform ${aberto ? 'rotate-90' : ''}`}>›</span>
                                         </div>
                                         {aberto && (
                                             <div className="px-4 pb-4 border-t border-gray-700 pt-4 space-y-4">
                                                 <div>
                                                     <p className="text-gray-400 text-xs font-semibold mb-2 uppercase tracking-wide">Calendário</p>
                                                     <div className="grid grid-cols-7 gap-0.5 text-center">
-                                                        {['D','S','T','Q','Q','S','S'].map((d,i) => <div key={i} className="text-gray-600 text-[9px] py-0.5">{d}</div>)}
-                                                        {Array.from({length:primeiroDiaSemana}).map((_,i) => <div key={`v${i}`} />)}
-                                                        {Array.from({length:diasNoMes}).map((_,i) => {
-                                                            const dia=i+1
-                                                            const dataStr=`${ano}-${String(mes+1).padStart(2,'0')}-${String(dia).padStart(2,'0')}`
-                                                            const reg=regsC.find(r=>r.data===dataStr); const ev=evsC.find(e=>e.data===dataStr); const ft=ftsC.find(f=>f.data===dataStr)
-                                                            const util=new Date(ano,mes,dia).getDay()!==0&&new Date(ano,mes,dia).getDay()!==6
-                                                            let bg='bg-gray-700'
-                                                            if(ft?.status==='abonada') bg='bg-blue-500 bg-opacity-30'
-                                                            else if(ft?.status==='falta') bg='bg-red-500 bg-opacity-40'
-                                                            else if(ev?.status==='aprovado') bg=corEvento(ev.tipo).bg.replace('bg-opacity-20','bg-opacity-40')
-                                                            else if(ev?.status==='pendente') bg='bg-yellow-500 bg-opacity-30'
-                                                            else if(reg?.entrada&&reg?.saida) bg='bg-green-500 bg-opacity-30'
-                                                            else if(reg?.entrada) bg='bg-yellow-500 bg-opacity-30'
-                                                            else if(util) bg='bg-red-500 bg-opacity-20'
-                                                            return <div key={dia} className={`rounded text-[9px] py-0.5 ${bg}`}><span className="text-white">{dia}</span>{ev?.descricao&&<div className="text-[7px] text-white truncate px-0.5">{ev.descricao.slice(0,6)}</div>}</div>
+                                                        {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((d, i) => <div key={i} className="text-gray-600 text-[9px] py-0.5">{d}</div>)}
+                                                        {Array.from({ length: primeiroDiaSemana }).map((_, i) => <div key={`v${i}`} />)}
+                                                        {Array.from({ length: diasNoMes }).map((_, i) => {
+                                                            const dia = i + 1
+                                                            const dataStr = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
+                                                            const reg = regsC.find(r => r.data === dataStr); const ev = evsC.find(e => e.data === dataStr); const ft = ftsC.find(f => f.data === dataStr)
+                                                            const util = new Date(ano, mes, dia).getDay() !== 0 && new Date(ano, mes, dia).getDay() !== 6
+                                                            let bg = 'bg-gray-700'
+                                                            if (ft?.status === 'abonada') bg = 'bg-blue-500 bg-opacity-30'
+                                                            else if (ft?.status === 'falta') bg = 'bg-red-500 bg-opacity-40'
+                                                            else if (ev?.status === 'aprovado') bg = corEvento(ev.tipo).bg.replace('bg-opacity-20', 'bg-opacity-40')
+                                                            else if (ev?.status === 'pendente') bg = 'bg-yellow-500 bg-opacity-30'
+                                                            else if (reg?.entrada && reg?.saida) bg = 'bg-green-500 bg-opacity-30'
+                                                            else if (reg?.entrada) bg = 'bg-yellow-500 bg-opacity-30'
+                                                            else if (util) bg = 'bg-red-500 bg-opacity-20'
+                                                            return <div key={dia} className={`rounded text-[9px] py-0.5 ${bg}`}><span className="text-white">{dia}</span>{ev?.descricao && <div className="text-[7px] text-white truncate px-0.5">{ev.descricao.slice(0, 6)}</div>}</div>
                                                         })}
                                                     </div>
                                                 </div>
@@ -703,9 +727,9 @@ export default function RelatorioMensal({ usuario }) {
                                                         <p className="text-gray-400 text-xs font-semibold mb-2 uppercase tracking-wide">Faltas</p>
                                                         <div className="space-y-1">
                                                             {ftsC.map(ft => (
-                                                                <div key={ft.id} className={`flex justify-between items-center rounded-lg px-3 py-2 ${ft.status==='abonada'?'bg-blue-500 bg-opacity-10':'bg-red-500 bg-opacity-10'}`}>
-                                                                    <div><span className="text-xs font-semibold text-white">{new Date(ft.data+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})} — {ft.status==='abonada'?'Abonada':'Falta'}</span>{ft.justificativa&&<p className="text-gray-500 text-[10px]">{ft.justificativa}</p>}</div>
-                                                                    {ft.status==='falta' ? <button onClick={() => {setModalAbono({falta:ft});setJustAbono('')}} className="text-blue-400 text-xs font-bold cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none hover:text-blue-300">Abonar</button> : <button onClick={() => desfazerAbono(ft.id)} className="text-gray-500 text-xs cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none hover:text-gray-300">Desfazer</button>}
+                                                                <div key={ft.id} className={`flex justify-between items-center rounded-lg px-3 py-2 ${ft.status === 'abonada' ? 'bg-blue-500 bg-opacity-10' : 'bg-red-500 bg-opacity-10'}`}>
+                                                                    <div><span className="text-xs font-semibold text-white">{new Date(ft.data + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} — {ft.status === 'abonada' ? 'Abonada' : 'Falta'}</span>{ft.justificativa && <p className="text-gray-500 text-[10px]">{ft.justificativa}</p>}</div>
+                                                                    {ft.status === 'falta' ? <button onClick={() => { setModalAbono({ falta: ft }); setJustAbono('') }} className="text-blue-400 text-xs font-bold cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none hover:text-blue-300">Abonar</button> : <button onClick={() => desfazerAbono(ft.id)} className="text-gray-500 text-xs cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none hover:text-gray-300">Desfazer</button>}
                                                                 </div>
                                                             ))}
                                                         </div>
@@ -716,12 +740,14 @@ export default function RelatorioMensal({ usuario }) {
                                                     <div>
                                                         <p className="text-gray-400 text-xs font-semibold mb-2 uppercase tracking-wide">Eventos</p>
                                                         <div className="space-y-1">
-                                                            {evsAprov.map(ev => { const cor=corEvento(ev.tipo); return (
-                                                                <div key={ev.id} className={`flex justify-between items-center rounded-lg px-3 py-2 ${cor.bg}`}>
-                                                                    <span className="text-xs text-white">{new Date(ev.data+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})} — {TIPOS_EVENTO.find(t=>t.value===ev.tipo)?.label}{ev.descricao&&` — ${ev.descricao}`}</span>
-                                                                    <div className="flex items-center gap-2"><span className="font-bold text-xs text-white">{brl(ev.valor)}</span><button onClick={() => excluirEvento(ev.id)} className="text-gray-500 hover:text-red-400 cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none text-base">×</button></div>
-                                                                </div>
-                                                            )})}
+                                                            {evsAprov.map(ev => {
+                                                                const cor = corEvento(ev.tipo); return (
+                                                                    <div key={ev.id} className={`flex justify-between items-center rounded-lg px-3 py-2 ${cor.bg}`}>
+                                                                        <span className="text-xs text-white">{new Date(ev.data + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} — {TIPOS_EVENTO.find(t => t.value === ev.tipo)?.label}{ev.descricao && ` — ${ev.descricao}`}</span>
+                                                                        <div className="flex items-center gap-2"><span className="font-bold text-xs text-white">{brl(ev.valor)}</span><button onClick={() => excluirEvento(ev.id)} className="text-gray-500 hover:text-red-400 cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none text-base">×</button></div>
+                                                                    </div>
+                                                                )
+                                                            })}
                                                         </div>
                                                     </div>
                                                 )}
@@ -731,24 +757,24 @@ export default function RelatorioMensal({ usuario }) {
                                                     <div className="space-y-1">
                                                         <LinhaResumo label="Salário fixo" valor={calc.salario} qtd={1} />
                                                         <LinhaResumo label="Ajuda de custo" valor={calc.ajuda} qtd={1} />
-                                                        <LinhaResumo label="Cachê" valor={calc.cache} qtd={calc.nCache} unitario={calc.nCache?calc.cache/calc.nCache:0} />
-                                                        <LinhaResumo label="Meio Cachê" valor={calc.mCache} qtd={calc.nMCache} unitario={calc.nMCache?calc.mCache/calc.nMCache:0} />
-                                                        <LinhaResumo label="Dia Trabalhado" valor={calc.diaTrab} qtd={calc.nDiaTrab} unitario={calc.nDiaTrab?calc.diaTrab/calc.nDiaTrab:0} />
-                                                        <LinhaResumo label="Feriado Trabalhado" valor={calc.ferTrab} qtd={calc.nFerTrab} unitario={calc.nFerTrab?calc.ferTrab/calc.nFerTrab:0} />
+                                                        <LinhaResumo label="Cachê" valor={calc.cache} qtd={calc.nCache} unitario={calc.nCache ? calc.cache / calc.nCache : 0} />
+                                                        <LinhaResumo label="Meio Cachê" valor={calc.mCache} qtd={calc.nMCache} unitario={calc.nMCache ? calc.mCache / calc.nMCache : 0} />
+                                                        <LinhaResumo label="Dia Trabalhado" valor={calc.diaTrab} qtd={calc.nDiaTrab} unitario={calc.nDiaTrab ? calc.diaTrab / calc.nDiaTrab : 0} />
+                                                        <LinhaResumo label="Feriado Trabalhado" valor={calc.ferTrab} qtd={calc.nFerTrab} unitario={calc.nFerTrab ? calc.ferTrab / calc.nFerTrab : 0} />
                                                         <LinhaResumo label="Férias" valor={calc.fer} qtd={1} />
                                                         <LinhaResumo label="Décimo Terceiro" valor={calc.dec} qtd={1} />
                                                         <LinhaResumo label="Bônus" valor={calc.bonus} qtd={1} />
                                                         <LinhaResumo label="Ajuda Moradia" valor={calc.moradia} qtd={1} />
-                                                        <LinhaResumo label={`Horas extra — ${calc.horas>calc.dias*9?(calc.horas-calc.dias*9).toFixed(1):0}h × ${brl(calc.diasUteisMes>0?calc.salario/calc.diasUteisMes/9:0)}/h`} valor={calc.hExtra} qtd={1} />
-                                                        {calc.descontoFalta>0&&<div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Faltas — {calc.faltasNaoAbonadas}x <span className="text-gray-600">({brl(calc.diasUteisMes>0?calc.salario/calc.diasUteisMes:0)}/dia)</span></span><span className="font-semibold text-xs text-red-400">-{brl(calc.descontoFalta)}</span></div>}
-                                                        {calc.adiant>0&&<div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Adiantamentos</span><span className="font-semibold text-xs text-red-400">-{brl(calc.adiant)}</span></div>}
-                                                        {calc.desc>0&&<div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Descontos</span><span className="font-semibold text-xs text-red-400">-{brl(calc.desc)}</span></div>}
+                                                        <LinhaResumo label={`Horas extra — ${calc.horas > calc.dias * 9 ? (calc.horas - calc.dias * 9).toFixed(1) : 0}h × ${brl(calc.diasUteisMes > 0 ? calc.salario / calc.diasUteisMes / 9 : 0)}/h`} valor={calc.hExtra} qtd={1} />
+                                                        {calc.descontoFalta > 0 && <div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Faltas — {calc.faltasNaoAbonadas}x <span className="text-gray-600">({brl(calc.diasUteisMes > 0 ? calc.salario / calc.diasUteisMes : 0)}/dia)</span></span><span className="font-semibold text-xs text-red-400">-{brl(calc.descontoFalta)}</span></div>}
+                                                        {calc.adiant > 0 && <div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Adiantamentos</span><span className="font-semibold text-xs text-red-400">-{brl(calc.adiant)}</span></div>}
+                                                        {calc.desc > 0 && <div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Descontos</span><span className="font-semibold text-xs text-red-400">-{brl(calc.desc)}</span></div>}
                                                     </div>
                                                 </div>
 
                                                 <div className="border-t border-gray-700 mt-2 pt-2 space-y-1">
-                                                    <div className="flex justify-between px-3 py-1"><span className="text-gray-400 text-xs font-semibold">Total bruto</span><span className="text-green-400 text-sm font-bold">{brl(calc.salario+calc.ajuda+calc.cache+calc.mCache+calc.diaTrab+calc.ferTrab+calc.fer+calc.dec+calc.bonus+calc.moradia+calc.hExtra)}</span></div>
-                                                    <div className="flex justify-between px-3 py-1"><span className="text-gray-400 text-xs font-semibold">Total descontos</span><span className="text-red-400 text-sm font-bold">-{brl(calc.descontoFalta+calc.adiant+calc.desc)}</span></div>
+                                                    <div className="flex justify-between px-3 py-1"><span className="text-gray-400 text-xs font-semibold">Total bruto</span><span className="text-green-400 text-sm font-bold">{brl(calc.salario + calc.ajuda + calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia + calc.hExtra)}</span></div>
+                                                    <div className="flex justify-between px-3 py-1"><span className="text-gray-400 text-xs font-semibold">Total descontos</span><span className="text-red-400 text-sm font-bold">-{brl(calc.descontoFalta + calc.adiant + calc.desc)}</span></div>
                                                     <div className="flex justify-between bg-gray-700 rounded-lg px-3 py-2"><span className="text-white text-sm font-bold">Total líquido</span><span className="text-white text-sm font-bold">{brl(calc.total)}</span></div>
                                                 </div>
 
@@ -756,21 +782,23 @@ export default function RelatorioMensal({ usuario }) {
                                                     <div>
                                                         <p className="text-gray-400 text-xs font-semibold mb-2 uppercase tracking-wide">Lançamentos</p>
                                                         <div className="space-y-1">
-                                                            {lancsC.map(l => { const isCredito=l.tipo==='ferias'||l.tipo==='decimo_terceiro'||l.tipo==='bonus'||l.tipo==='ajuda_moradia'; return (
-                                                                <div key={l.id} className="flex justify-between text-xs bg-gray-900 rounded-lg px-3 py-2">
-                                                                    <span className="text-gray-300">{[...TIPOS_DEBITO,...TIPOS_CREDITO].find(t=>t.value===l.tipo)?.label} {l.descricao?`— ${l.descricao}`:''}</span>
-                                                                    <span className={isCredito?'text-green-400':'text-red-400'}>{isCredito?'+':'-'}{brl(Number(l.valor))}</span>
-                                                                </div>
-                                                            )})}
+                                                            {lancsC.map(l => {
+                                                                const isCredito = l.tipo === 'ferias' || l.tipo === 'decimo_terceiro' || l.tipo === 'bonus' || l.tipo === 'ajuda_moradia'; return (
+                                                                    <div key={l.id} className="flex justify-between text-xs bg-gray-900 rounded-lg px-3 py-2">
+                                                                        <span className="text-gray-300">{[...TIPOS_DEBITO, ...TIPOS_CREDITO].find(t => t.value === l.tipo)?.label} {l.descricao ? `— ${l.descricao}` : ''}</span>
+                                                                        <span className={isCredito ? 'text-green-400' : 'text-red-400'}>{isCredito ? '+' : '-'}{brl(Number(l.valor))}</span>
+                                                                    </div>
+                                                                )
+                                                            })}
                                                         </div>
                                                     </div>
                                                 )}
 
-                                                {(colab.pix||colab.banco)&&<div className="bg-gray-900 rounded-lg px-3 py-2 text-xs text-gray-400 space-y-0.5">{colab.banco&&<p>🏦 {colab.banco} · Ag: {colab.agencia} · Cc: {colab.conta}</p>}{colab.pix&&<p>PIX: {colab.pix}</p>}</div>}
+                                                {(colab.pix || colab.banco) && <div className="bg-gray-900 rounded-lg px-3 py-2 text-xs text-gray-400 space-y-0.5">{colab.banco && <p>🏦 {colab.banco} · Ag: {colab.agencia} · Cc: {colab.conta}</p>}{colab.pix && <p>PIX: {colab.pix}</p>}</div>}
 
                                                 <div className="flex items-center justify-between pt-2 border-t border-gray-700">
                                                     <div><p className="text-gray-400 text-xs">Total líquido</p><p className="text-white font-bold text-lg">{brl(calc.total)}</p></div>
-                                                    {aprovado ? <button onClick={() => desaprovarColaborador(colab.id)} disabled={aprovando===colab.id} className="bg-gray-700 text-gray-300 font-bold py-2 px-4 rounded-xl cursor-pointer hover:bg-gray-600 transition-colors text-sm w-auto disabled:opacity-50">Desfazer</button> : <button onClick={() => aprovarColaborador(colab.id,calc.total)} disabled={aprovando===colab.id} className="bg-green-500 text-white font-bold py-2 px-5 rounded-xl cursor-pointer hover:bg-green-600 transition-colors text-sm w-auto disabled:opacity-50">{aprovando===colab.id?'Aprovando...':'✓ Aprovar'}</button>}
+                                                    {aprovado ? <button onClick={() => desaprovarColaborador(colab.id)} disabled={aprovando === colab.id} className="bg-gray-700 text-gray-300 font-bold py-2 px-4 rounded-xl cursor-pointer hover:bg-gray-600 transition-colors text-sm w-auto disabled:opacity-50">Desfazer</button> : <button onClick={() => aprovarColaborador(colab.id, calc.total)} disabled={aprovando === colab.id} className="bg-green-500 text-white font-bold py-2 px-5 rounded-xl cursor-pointer hover:bg-green-600 transition-colors text-sm w-auto disabled:opacity-50">{aprovando === colab.id ? 'Aprovando...' : '✓ Aprovar'}</button>}
                                                 </div>
                                             </div>
                                         )}
@@ -787,49 +815,49 @@ export default function RelatorioMensal({ usuario }) {
                 <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
                     <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
                         <div className="flex items-center justify-between mb-4">
-                            <div><h3 className="text-white text-lg font-bold">Resolver falta</h3><p className="text-gray-400 text-sm">{new Date(modalAbono.falta.data+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'})}</p></div>
+                            <div><h3 className="text-white text-lg font-bold">Resolver falta</h3><p className="text-gray-400 text-sm">{new Date(modalAbono.falta.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p></div>
                             <button onClick={() => setModalAbono(null)} className="text-gray-400 hover:text-white cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none text-2xl">✕</button>
                         </div>
                         <div className="grid grid-cols-3 gap-1 mb-4">
-                            {[['abonar','📋 Abonar'],['ponto','🕐 Ponto'],['evento','🎵 Evento']].map(([aba,label]) => (
-                                <button key={aba} onClick={() => setAbaAbono(aba)} className={`py-2 px-2 rounded-xl text-xs font-semibold cursor-pointer transition-colors border w-auto ${abaAbono===aba?'bg-green-500 text-white border-green-500':'bg-gray-800 text-gray-300 border-gray-700'}`}>{label}</button>
+                            {[['abonar', '📋 Abonar'], ['ponto', '🕐 Ponto'], ['evento', '🎵 Evento']].map(([aba, label]) => (
+                                <button key={aba} onClick={() => setAbaAbono(aba)} className={`py-2 px-2 rounded-xl text-xs font-semibold cursor-pointer transition-colors border w-auto ${abaAbono === aba ? 'bg-green-500 text-white border-green-500' : 'bg-gray-800 text-gray-300 border-gray-700'}`}>{label}</button>
                             ))}
                         </div>
-                        {abaAbono==='abonar' && (
+                        {abaAbono === 'abonar' && (
                             <div className="space-y-3">
                                 <p className="text-gray-400 text-xs">Falta justificada. Não desconta do salário.</p>
-                                <div><label className="text-gray-400 text-xs mb-1 block">Justificativa</label><textarea value={justAbono} onChange={e=>setJustAbono(e.target.value)} placeholder="Ex: Atestado médico..." rows={3} className={inputCls+' resize-none placeholder-gray-600'} /></div>
+                                <div><label className="text-gray-400 text-xs mb-1 block">Justificativa</label><textarea value={justAbono} onChange={e => setJustAbono(e.target.value)} placeholder="Ex: Atestado médico..." rows={3} className={inputCls + ' resize-none placeholder-gray-600'} /></div>
                                 <div className="flex gap-3">
                                     <button onClick={() => setModalAbono(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button>
-                                    <button onClick={() => abonarFalta(modalAbono.falta.id,justAbono)} disabled={salvandoAbono} className="flex-1 bg-blue-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-blue-600 disabled:opacity-40 transition-colors">{salvandoAbono?'Salvando...':'✓ Abonar'}</button>
+                                    <button onClick={() => abonarFalta(modalAbono.falta.id, justAbono)} disabled={salvandoAbono} className="flex-1 bg-blue-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-blue-600 disabled:opacity-40 transition-colors">{salvandoAbono ? 'Salvando...' : '✓ Abonar'}</button>
                                 </div>
                             </div>
                         )}
-                        {abaAbono==='ponto' && (
+                        {abaAbono === 'ponto' && (
                             <div className="space-y-3">
                                 <p className="text-gray-400 text-xs">Cria registro de ponto para este dia.</p>
                                 <div className="grid grid-cols-2 gap-3">
-                                    <div><label className="text-gray-400 text-xs mb-1 block">Entrada *</label><input type="time" value={formPontoFalta.entrada} onChange={e=>setFormPontoFalta(f=>({...f,entrada:e.target.value}))} className={inputCls} /></div>
-                                    <div><label className="text-gray-400 text-xs mb-1 block">Saída</label><input type="time" value={formPontoFalta.saida} onChange={e=>setFormPontoFalta(f=>({...f,saida:e.target.value}))} className={inputCls} /></div>
+                                    <div><label className="text-gray-400 text-xs mb-1 block">Entrada *</label><input type="time" value={formPontoFalta.entrada} onChange={e => setFormPontoFalta(f => ({ ...f, entrada: e.target.value }))} className={inputCls} /></div>
+                                    <div><label className="text-gray-400 text-xs mb-1 block">Saída</label><input type="time" value={formPontoFalta.saida} onChange={e => setFormPontoFalta(f => ({ ...f, saida: e.target.value }))} className={inputCls} /></div>
                                 </div>
                                 <div className="flex gap-3">
                                     <button onClick={() => setModalAbono(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button>
-                                    <button onClick={salvarPontoFalta} disabled={salvandoAbono||!formPontoFalta.entrada} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{salvandoAbono?'Salvando...':'✓ Salvar ponto'}</button>
+                                    <button onClick={salvarPontoFalta} disabled={salvandoAbono || !formPontoFalta.entrada} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{salvandoAbono ? 'Salvando...' : '✓ Salvar ponto'}</button>
                                 </div>
                             </div>
                         )}
-                        {abaAbono==='evento' && (
+                        {abaAbono === 'evento' && (
                             <div className="space-y-3">
                                 <p className="text-gray-400 text-xs">Remove a falta e lança o cachê.</p>
                                 <div>
                                     <label className="text-gray-400 text-xs mb-2 block">Tipo</label>
-                                    <div className="grid grid-cols-2 gap-2">{TIPOS_EVENTO.map(t => <button key={t.value} type="button" onClick={() => setFormEventoFalta(f=>({...f,tipo:t.value,valor:valorParaTipo(t.value,colaboradorSel)}))} className={`py-2 px-3 rounded-xl text-xs font-semibold cursor-pointer transition-colors border w-auto ${formEventoFalta.tipo===t.value?'bg-green-500 text-white border-green-500':'bg-gray-800 text-gray-300 border-gray-700'}`}>{t.label}</button>)}</div>
+                                    <div className="grid grid-cols-2 gap-2">{TIPOS_EVENTO.map(t => <button key={t.value} type="button" onClick={() => setFormEventoFalta(f => ({ ...f, tipo: t.value, valor: valorParaTipo(t.value, colaboradorSel) }))} className={`py-2 px-3 rounded-xl text-xs font-semibold cursor-pointer transition-colors border w-auto ${formEventoFalta.tipo === t.value ? 'bg-green-500 text-white border-green-500' : 'bg-gray-800 text-gray-300 border-gray-700'}`}>{t.label}</button>)}</div>
                                 </div>
-                                <div><label className="text-gray-400 text-xs mb-1 block">Descrição</label><input value={formEventoFalta.descricao} onChange={e=>setFormEventoFalta(f=>({...f,descricao:e.target.value}))} placeholder="Ex: Léo Santana..." className={inputCls+' placeholder-gray-600'} /></div>
-                                <div><label className="text-gray-400 text-xs mb-1 block">Valor</label><input type="text" value={formEventoFalta.valor} onChange={e=>{const num=e.target.value.replace(/\D/g,'');setFormEventoFalta(f=>({...f,valor:num?(Number(num)/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}):''}))} } placeholder="R$ 0,00" className={inputCls} /></div>
+                                <div><label className="text-gray-400 text-xs mb-1 block">Descrição</label><input value={formEventoFalta.descricao} onChange={e => setFormEventoFalta(f => ({ ...f, descricao: e.target.value }))} placeholder="Ex: Léo Santana..." className={inputCls + ' placeholder-gray-600'} /></div>
+                                <div><label className="text-gray-400 text-xs mb-1 block">Valor</label><input type="text" value={formEventoFalta.valor} onChange={e => { const num = e.target.value.replace(/\D/g, ''); setFormEventoFalta(f => ({ ...f, valor: num ? (Number(num) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '' })) }} placeholder="R$ 0,00" className={inputCls} /></div>
                                 <div className="flex gap-3">
                                     <button onClick={() => setModalAbono(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button>
-                                    <button onClick={salvarEventoFalta} disabled={salvandoAbono||!formEventoFalta.valor} className="flex-1 bg-purple-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-purple-600 disabled:opacity-40 transition-colors">{salvandoAbono?'Salvando...':'✓ Lançar evento'}</button>
+                                    <button onClick={salvarEventoFalta} disabled={salvandoAbono || !formEventoFalta.valor} className="flex-1 bg-purple-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-purple-600 disabled:opacity-40 transition-colors">{salvandoAbono ? 'Salvando...' : '✓ Lançar evento'}</button>
                                 </div>
                             </div>
                         )}
@@ -842,30 +870,62 @@ export default function RelatorioMensal({ usuario }) {
                 <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
                     <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
                         <div className="flex items-center justify-between mb-4">
-                            <div><h3 className="text-white text-lg font-bold">{modalEvento.eventoExistente?'Editar evento':'Lançar evento'}</h3><p className="text-gray-400 text-sm">{new Date(modalEvento.data+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'})}</p></div>
+                            <div><h3 className="text-white text-lg font-bold">{modalEvento.eventoExistente ? 'Editar evento' : 'Lançar evento'}</h3><p className="text-gray-400 text-sm">{new Date(modalEvento.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p></div>
                             <button onClick={() => setModalEvento(null)} className="text-gray-400 hover:text-white cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none text-2xl">✕</button>
                         </div>
-                        {!isAdmin && modalEvento.eventoExistente?.status==='aprovado' ? (
+                        {!isAdmin && modalEvento.eventoExistente?.status === 'aprovado' ? (
                             <div className="bg-green-500 bg-opacity-10 border border-green-500 border-opacity-30 rounded-xl p-4">
                                 <p className="text-green-400 text-sm font-semibold">✓ Evento aprovado pelo admin.</p>
-                                <p className="text-gray-400 text-xs mt-1">{TIPOS_EVENTO.find(t=>t.value===modalEvento.eventoExistente.tipo)?.label} — {brl(modalEvento.eventoExistente.valor)}</p>
-                                {modalEvento.eventoExistente.descricao&&<p className="text-gray-400 text-xs">{modalEvento.eventoExistente.descricao}</p>}
+                                <p className="text-gray-400 text-xs mt-1">{TIPOS_EVENTO.find(t => t.value === modalEvento.eventoExistente.tipo)?.label} — {brl(modalEvento.eventoExistente.valor)}</p>
+                                {modalEvento.eventoExistente.descricao && <p className="text-gray-400 text-xs">{modalEvento.eventoExistente.descricao}</p>}
                             </div>
                         ) : (
                             <div className="space-y-4">
-                                <div>
-                                    <label className="text-gray-400 text-xs mb-2 block">Tipo</label>
-                                    <div className="grid grid-cols-2 gap-2">{TIPOS_EVENTO.map(t => <button key={t.value} type="button" onClick={() => mudarTipoEvento(t.value)} className={`py-2 px-3 rounded-xl text-xs font-semibold cursor-pointer transition-colors border w-auto ${formEvento.tipo===t.value?'bg-green-500 text-white border-green-500':'bg-gray-800 text-gray-300 border-gray-700 hover:border-green-500'}`}>{t.label}</button>)}</div>
+                                {/* Horário — disponível para todos, independente de evento */}
+                                <div className="bg-gray-800 rounded-xl p-3">
+                                    <p className="text-white text-xs font-semibold mb-2">🕐 Corrigir horário do dia</p>
+                                    <p className="text-gray-500 text-[10px] mb-2">Preencha se esqueceu de bater o ponto. Não soma valores extras.</p>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div><label className="text-gray-500 text-[10px] mb-0.5 block">Entrada</label><input type="time" value={formEvento.entrada || ''} onChange={e => setFormEvento(f => ({ ...f, entrada: e.target.value }))} className={inputCls} /></div>
+                                        <div><label className="text-gray-500 text-[10px] mb-0.5 block">Saída</label><input type="time" value={formEvento.saida || ''} onChange={e => setFormEvento(f => ({ ...f, saida: e.target.value }))} className={inputCls} /></div>
+                                    </div>
                                 </div>
-                                <div><label className="text-gray-400 text-xs mb-1 block">Descrição / Nome do evento</label><input value={formEvento.descricao} onChange={e=>setFormEvento(f=>({...f,descricao:e.target.value}))} placeholder="Ex: Léo Santana, Good Times..." className={inputCls+' placeholder-gray-600'} /></div>
-                                <div><label className="text-gray-400 text-xs mb-1 block">Valor</label><input type="text" value={formEvento.valor} onChange={e=>{const num=e.target.value.replace(/\D/g,'');setFormEvento(f=>({...f,valor:num?(Number(num)/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}):''}))} } placeholder="R$ 0,00" className={inputCls} /></div>
-                                {!isAdmin && <p className="text-yellow-400 text-xs">⚠ Será enviado para aprovação do admin.</p>}
+
+                                {/* Evento extra — opcional */}
+                                <div>
+                                    <p className="text-white text-xs font-semibold mb-2">📋 Lançar evento extra <span className="text-gray-500 font-normal">(opcional)</span></p>
+                                    <div className="grid grid-cols-2 gap-2 mb-3">
+                                        {/* Dia Trabalhado e Feriado — todos podem */}
+                                        {[
+                                            { value: 'dia_normal', label: 'Dia Normal' },
+                                            ...(Number(usuario.cache_evento) > 0 ? [{ value: 'cache', label: 'Cachê' }, { value: 'meio_cache', label: 'Meio Cachê' }] : []),
+                                            { value: 'dia_trabalhado', label: 'Dia Trabalhado' },
+                                            { value: 'feriado_trabalhado', label: 'Feriado Trabalhado' },
+                                        ].map(t => (
+                                            <button key={t.value} type="button" onClick={() => setFormEvento(f => ({ ...f, tipo: t.value, valor: t.value === 'dia_normal' ? '' : valorParaTipo(t.value, usuario) }))}
+                                                className={`py-2 px-3 rounded-xl text-xs font-semibold cursor-pointer transition-colors border w-auto ${formEvento.tipo === t.value ? 'bg-green-500 text-white border-green-500' : 'bg-gray-800 text-gray-300 border-gray-700 hover:border-green-500'}`}>
+                                                {t.label}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    {formEvento.tipo !== 'dia_normal' && (
+                                        <>
+                                            <div className="mb-3"><label className="text-gray-400 text-xs mb-1 block">Descrição / Nome do evento</label><input value={formEvento.descricao} onChange={e => setFormEvento(f => ({ ...f, descricao: e.target.value }))} placeholder="Ex: Léo Santana, Good Times..." className={inputCls + ' placeholder-gray-600'} /></div>
+                                            <div><label className="text-gray-400 text-xs mb-1 block">Valor</label><input type="text" value={formEvento.valor} onChange={e => { const num = e.target.value.replace(/\D/g, ''); setFormEvento(f => ({ ...f, valor: num ? (Number(num) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '' })) }} placeholder="R$ 0,00" className={inputCls} /></div>
+                                        </>
+                                    )}
+
+                                    {formEvento.tipo === 'dia_normal' && <p className="text-gray-600 text-[10px]">Dia normal — apenas corrige o ponto. Horas extras serão calculadas automaticamente se houver.</p>}
+                                </div>
+
+                                <p className="text-yellow-400 text-xs">⚠ Será enviado para aprovação do admin.</p>
                             </div>
                         )}
                         <div className="flex gap-3 mt-5">
-                            {modalEvento.eventoExistente && <button onClick={() => {excluirEvento(modalEvento.eventoExistente.id);setModalEvento(null)}} className="bg-red-500 bg-opacity-20 text-red-400 font-bold py-3 px-4 rounded-2xl cursor-pointer hover:bg-opacity-30 transition-colors border-0 shadow-none w-auto">Excluir</button>}
-                            <button onClick={() => setModalEvento(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">{(!isAdmin&&modalEvento.eventoExistente?.status==='aprovado')?'Fechar':'Cancelar'}</button>
-                            {(!modalEvento.eventoExistente||modalEvento.eventoExistente?.status!=='aprovado'||isAdmin) && <button onClick={salvarEvento} disabled={salvandoEvento||!formEvento.valor} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{salvandoEvento?'Salvando...':isAdmin?'Salvar':'Solicitar'}</button>}
+                            {modalEvento.eventoExistente && <button onClick={() => { excluirEvento(modalEvento.eventoExistente.id); setModalEvento(null) }} className="bg-red-500 bg-opacity-20 text-red-400 font-bold py-3 px-4 rounded-2xl cursor-pointer hover:bg-opacity-30 transition-colors border-0 shadow-none w-auto">Excluir</button>}
+                            <button onClick={() => setModalEvento(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">{(!isAdmin && modalEvento.eventoExistente?.status === 'aprovado') ? 'Fechar' : 'Cancelar'}</button>
+                            {(!modalEvento.eventoExistente || modalEvento.eventoExistente?.status !== 'aprovado' || isAdmin) && <button onClick={salvarEvento} disabled={salvandoEvento || (isAdmin && !formEvento.valor) || (!isAdmin && formEvento.tipo !== 'dia_normal' && !formEvento.valor) || (!isAdmin && formEvento.tipo === 'dia_normal' && !formEvento.entrada && !formEvento.saida)} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{salvandoEvento ? 'Salvando...' : isAdmin ? 'Salvar' : 'Solicitar'}</button>}
                         </div>
                     </div>
                 </div>
@@ -876,24 +936,24 @@ export default function RelatorioMensal({ usuario }) {
                 <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
                     <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-md border border-gray-700">
                         <div className="flex items-center justify-between mb-5">
-                            <h3 className="text-white text-lg font-bold">{tipoModalLanc==='credito'?'Novo crédito':'Novo débito'}</h3>
+                            <h3 className="text-white text-lg font-bold">{tipoModalLanc === 'credito' ? 'Novo crédito' : 'Novo débito'}</h3>
                             <button onClick={() => setModalLanc(false)} className="text-gray-400 hover:text-white cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none text-2xl">✕</button>
                         </div>
                         <div className="space-y-4">
-                            <div><label className="text-gray-400 text-xs mb-1 block">Colaborador *</label><select value={formLanc.colaboradorId} onChange={e=>{const novoId=e.target.value;const valorSug=valorSugeridoCredito(formLanc.tipo,novoId);setFormLanc(f=>({...f,colaboradorId:novoId,valor:valorSug||f.valor}))}} className={inputCls+' cursor-pointer'}><option value="">-- Selecione --</option>{colaboradores.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></div>
-                            <div><label className="text-gray-400 text-xs mb-2 block">Tipo *</label><div className="grid grid-cols-2 gap-2">{(tipoModalLanc==='credito'?TIPOS_CREDITO:TIPOS_DEBITO).map(t=><button key={t.value} type="button" onClick={()=>{const valorSug=tipoModalLanc==='credito'?valorSugeridoCredito(t.value,formLanc.colaboradorId):'';setFormLanc(f=>({...f,tipo:t.value,valor:valorSug||f.valor}))}} className={`py-2 px-3 rounded-xl text-sm font-semibold cursor-pointer transition-colors border w-auto ${formLanc.tipo===t.value?tipoModalLanc==='credito'?'bg-green-500 text-white border-green-500':'bg-red-500 text-white border-red-500':'bg-gray-800 text-gray-300 border-gray-700'}`}>{t.label}</button>)}</div></div>
-                            <div><label className="text-gray-400 text-xs mb-1 block">Descrição *</label><input value={formLanc.descricao} onChange={e=>setFormLanc(f=>({...f,descricao:e.target.value}))} placeholder={tipoModalLanc==='credito'?'Ex: Férias Jan/2026...':'Ex: Adiantamento 10/05...'} className={inputCls+' placeholder-gray-600'} /></div>
-                            {tipoModalLanc==='debito'&&<div><label className="text-gray-400 text-xs mb-1 block">Data</label><input type="date" value={formLanc.data} onChange={e=>setFormLanc(f=>({...f,data:e.target.value}))} className={inputCls+' cursor-pointer'} /></div>}
+                            <div><label className="text-gray-400 text-xs mb-1 block">Colaborador *</label><select value={formLanc.colaboradorId} onChange={e => { const novoId = e.target.value; const valorSug = valorSugeridoCredito(formLanc.tipo, novoId); setFormLanc(f => ({ ...f, colaboradorId: novoId, valor: valorSug || f.valor })) }} className={inputCls + ' cursor-pointer'}><option value="">-- Selecione --</option>{colaboradores.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}</select></div>
+                            <div><label className="text-gray-400 text-xs mb-2 block">Tipo *</label><div className="grid grid-cols-2 gap-2">{(tipoModalLanc === 'credito' ? TIPOS_CREDITO : TIPOS_DEBITO).map(t => <button key={t.value} type="button" onClick={() => { const valorSug = tipoModalLanc === 'credito' ? valorSugeridoCredito(t.value, formLanc.colaboradorId) : ''; setFormLanc(f => ({ ...f, tipo: t.value, valor: valorSug || f.valor })) }} className={`py-2 px-3 rounded-xl text-sm font-semibold cursor-pointer transition-colors border w-auto ${formLanc.tipo === t.value ? tipoModalLanc === 'credito' ? 'bg-green-500 text-white border-green-500' : 'bg-red-500 text-white border-red-500' : 'bg-gray-800 text-gray-300 border-gray-700'}`}>{t.label}</button>)}</div></div>
+                            <div><label className="text-gray-400 text-xs mb-1 block">Descrição *</label><input value={formLanc.descricao} onChange={e => setFormLanc(f => ({ ...f, descricao: e.target.value }))} placeholder={tipoModalLanc === 'credito' ? 'Ex: Férias Jan/2026...' : 'Ex: Adiantamento 10/05...'} className={inputCls + ' placeholder-gray-600'} /></div>
+                            {tipoModalLanc === 'debito' && <div><label className="text-gray-400 text-xs mb-1 block">Data</label><input type="date" value={formLanc.data} onChange={e => setFormLanc(f => ({ ...f, data: e.target.value }))} className={inputCls + ' cursor-pointer'} /></div>}
                             <div className="grid grid-cols-2 gap-3">
-                                <div><label className="text-gray-400 text-xs mb-1 block">Valor *</label><input type="text" value={formLanc.valor} onChange={e=>{const num=e.target.value.replace(/\D/g,'');setFormLanc(f=>({...f,valor:num?(Number(num)/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}):''}))} } placeholder="R$ 0,00" className={inputCls} /></div>
-                                {tipoModalLanc==='debito'&&<div><label className="text-gray-400 text-xs mb-1 block">Parcelas</label><input type="number" min="1" value={formLanc.parcelas} onChange={e=>setFormLanc(f=>({...f,parcelas:e.target.value}))} className={inputCls} /></div>}
+                                <div><label className="text-gray-400 text-xs mb-1 block">Valor *</label><input type="text" value={formLanc.valor} onChange={e => { const num = e.target.value.replace(/\D/g, ''); setFormLanc(f => ({ ...f, valor: num ? (Number(num) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '' })) }} placeholder="R$ 0,00" className={inputCls} /></div>
+                                {tipoModalLanc === 'debito' && <div><label className="text-gray-400 text-xs mb-1 block">Parcelas</label><input type="number" min="1" value={formLanc.parcelas} onChange={e => setFormLanc(f => ({ ...f, parcelas: e.target.value }))} className={inputCls} /></div>}
                             </div>
-                            {tipoModalLanc==='debito'&&parseInt(formLanc.parcelas)>1&&<p className="text-yellow-400 text-xs">⚠ Debitado em {formLanc.parcelas} meses consecutivos</p>}
-                            {tipoModalLanc==='credito'&&formLanc.tipo==='decimo_terceiro'&&<p className="text-blue-400 text-xs">ℹ Valor sugerido: salário ÷ 12</p>}
+                            {tipoModalLanc === 'debito' && parseInt(formLanc.parcelas) > 1 && <p className="text-yellow-400 text-xs">⚠ Debitado em {formLanc.parcelas} meses consecutivos</p>}
+                            {tipoModalLanc === 'credito' && formLanc.tipo === 'decimo_terceiro' && <p className="text-blue-400 text-xs">ℹ Valor sugerido: salário ÷ 12</p>}
                         </div>
                         <div className="flex gap-3 mt-6">
                             <button onClick={() => setModalLanc(false)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button>
-                            <button onClick={salvarLancamento} disabled={salvandoLanc||!formLanc.colaboradorId||!formLanc.descricao.trim()||!formLanc.valor} className={`flex-1 text-white font-bold py-3 rounded-2xl cursor-pointer disabled:opacity-40 transition-colors ${tipoModalLanc==='credito'?'bg-green-500 hover:bg-green-600':'bg-red-500 hover:bg-red-600'}`}>{salvandoLanc?'Salvando...':tipoModalLanc==='credito'?'Salvar crédito':'Salvar débito'}</button>
+                            <button onClick={salvarLancamento} disabled={salvandoLanc || !formLanc.colaboradorId || !formLanc.descricao.trim() || !formLanc.valor} className={`flex-1 text-white font-bold py-3 rounded-2xl cursor-pointer disabled:opacity-40 transition-colors ${tipoModalLanc === 'credito' ? 'bg-green-500 hover:bg-green-600' : 'bg-red-500 hover:bg-red-600'}`}>{salvandoLanc ? 'Salvando...' : tipoModalLanc === 'credito' ? 'Salvar crédito' : 'Salvar débito'}</button>
                         </div>
                     </div>
                 </div>
@@ -905,10 +965,10 @@ export default function RelatorioMensal({ usuario }) {
                     <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-md border border-gray-700">
                         <div className="flex items-center justify-between mb-5"><h3 className="text-white text-lg font-bold">Exportar Relatório</h3><button onClick={() => setModalExport(false)} className="text-gray-400 hover:text-white cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none text-2xl">✕</button></div>
                         <div className="space-y-4">
-                            <div><label className="text-gray-400 text-xs mb-2 block">Mês de referência</label><div className="grid grid-cols-2 gap-3"><select value={exportMes} onChange={e=>setExportMes(Number(e.target.value))} className={inputCls+' cursor-pointer'}>{Array.from({length:12}).map((_,i)=><option key={i} value={i}>{new Date(2024,i).toLocaleDateString('pt-BR',{month:'long'})}</option>)}</select><input type="number" value={exportAno} onChange={e=>setExportAno(Number(e.target.value))} className={inputCls} /></div></div>
-                            <div><label className="text-gray-400 text-xs mb-2 block">Colaboradores</label><div className="space-y-2 max-h-48 overflow-y-auto"><label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={exportColabs.length===colaboradores.length} onChange={e=>setExportColabs(e.target.checked?colaboradores.map(c=>c.id):[])} className="w-4 h-4 accent-green-500" /><span className="text-gray-300 text-sm font-semibold">Todos</span></label>{colaboradores.map(c=><label key={c.id} className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={exportColabs.includes(c.id)} onChange={e=>setExportColabs(prev=>e.target.checked?[...prev,c.id]:prev.filter(id=>id!==c.id))} className="w-4 h-4 accent-green-500" /><span className="text-gray-300 text-sm">{c.nome}</span></label>)}</div></div>
+                            <div><label className="text-gray-400 text-xs mb-2 block">Mês de referência</label><div className="grid grid-cols-2 gap-3"><select value={exportMes} onChange={e => setExportMes(Number(e.target.value))} className={inputCls + ' cursor-pointer'}>{Array.from({ length: 12 }).map((_, i) => <option key={i} value={i}>{new Date(2024, i).toLocaleDateString('pt-BR', { month: 'long' })}</option>)}</select><input type="number" value={exportAno} onChange={e => setExportAno(Number(e.target.value))} className={inputCls} /></div></div>
+                            <div><label className="text-gray-400 text-xs mb-2 block">Colaboradores</label><div className="space-y-2 max-h-48 overflow-y-auto"><label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={exportColabs.length === colaboradores.length} onChange={e => setExportColabs(e.target.checked ? colaboradores.map(c => c.id) : [])} className="w-4 h-4 accent-green-500" /><span className="text-gray-300 text-sm font-semibold">Todos</span></label>{colaboradores.map(c => <label key={c.id} className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={exportColabs.includes(c.id)} onChange={e => setExportColabs(prev => e.target.checked ? [...prev, c.id] : prev.filter(id => id !== c.id))} className="w-4 h-4 accent-green-500" /><span className="text-gray-300 text-sm">{c.nome}</span></label>)}</div></div>
                         </div>
-                        <div className="flex gap-3 mt-6"><button onClick={() => setModalExport(false)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button><button onClick={() => exportarXlsx(exportColabs,exportMes,exportAno)} disabled={exportando||exportColabs.length===0} className="flex-1 bg-blue-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-blue-600 disabled:opacity-40 transition-colors">{exportando?'Gerando...':`⬇ Exportar (${exportColabs.length})`}</button></div>
+                        <div className="flex gap-3 mt-6"><button onClick={() => setModalExport(false)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button><button onClick={() => exportarXlsx(exportColabs, exportMes, exportAno)} disabled={exportando || exportColabs.length === 0} className="flex-1 bg-blue-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-blue-600 disabled:opacity-40 transition-colors">{exportando ? 'Gerando...' : `⬇ Exportar (${exportColabs.length})`}</button></div>
                     </div>
                 </div>
             )}
@@ -922,19 +982,19 @@ export default function RelatorioMensal({ usuario }) {
                         ) : (
                             <>
                                 <h3 className="text-white text-lg font-bold mb-1">Solicitar correção de ponto</h3>
-                                <p className="text-gray-400 text-sm mb-5">{new Date(modalDia.data+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'})}</p>
+                                <p className="text-gray-400 text-sm mb-5">{new Date(modalDia.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
                                 {getSolicitacao(modalDia.dia) ? <div className="bg-yellow-500 bg-opacity-10 border border-yellow-500 border-opacity-30 rounded-xl p-4 mb-4"><p className="text-yellow-400 text-sm font-semibold">Você já tem uma solicitação para este dia.</p></div> : (
                                     <div className="space-y-4">
                                         <div className="grid grid-cols-2 gap-3">
-                                            <div><label className="text-gray-400 text-xs mb-1 block">Entrada</label><input type="time" value={formSol.entrada} onChange={e=>setFormSol(f=>({...f,entrada:e.target.value}))} className={inputCls} /></div>
-                                            <div><label className="text-gray-400 text-xs mb-1 block">Saída</label><input type="time" value={formSol.saida} onChange={e=>setFormSol(f=>({...f,saida:e.target.value}))} className={inputCls} /></div>
+                                            <div><label className="text-gray-400 text-xs mb-1 block">Entrada</label><input type="time" value={formSol.entrada} onChange={e => setFormSol(f => ({ ...f, entrada: e.target.value }))} className={inputCls} /></div>
+                                            <div><label className="text-gray-400 text-xs mb-1 block">Saída</label><input type="time" value={formSol.saida} onChange={e => setFormSol(f => ({ ...f, saida: e.target.value }))} className={inputCls} /></div>
                                         </div>
-                                        <div><label className="text-gray-400 text-xs mb-1 block">Justificativa *</label><textarea value={formSol.justificativa} onChange={e=>setFormSol(f=>({...f,justificativa:e.target.value}))} placeholder="Ex: Esqueci de bater a saída..." rows={3} className={inputCls+' resize-none placeholder-gray-600'} /></div>
+                                        <div><label className="text-gray-400 text-xs mb-1 block">Justificativa *</label><textarea value={formSol.justificativa} onChange={e => setFormSol(f => ({ ...f, justificativa: e.target.value }))} placeholder="Ex: Esqueci de bater a saída..." rows={3} className={inputCls + ' resize-none placeholder-gray-600'} /></div>
                                     </div>
                                 )}
                                 <div className="flex gap-3 mt-5">
                                     <button onClick={() => setModalDia(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button>
-                                    {!getSolicitacao(modalDia.dia)&&<button onClick={enviarSolicitacao} disabled={enviandoSol||!formSol.justificativa.trim()} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{enviandoSol?'Enviando...':'Enviar'}</button>}
+                                    {!getSolicitacao(modalDia.dia) && <button onClick={enviarSolicitacao} disabled={enviandoSol || !formSol.justificativa.trim()} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{enviandoSol ? 'Enviando...' : 'Enviar'}</button>}
                                 </div>
                             </>
                         )}
