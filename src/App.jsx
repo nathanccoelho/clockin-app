@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import SuperAdmin from './pages/SuperAdmin'
-import Totem from './pages/Totem'
+import { supabase } from './supabase'
 
 const SESSION_KEY = 'ponto_usuario'
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000
@@ -20,9 +20,22 @@ export default function App() {
       if (Date.now() > sessao.expiraEm) { localStorage.removeItem(SESSION_KEY); setCarregando(false); return }
       setUsuario(sessao.usuario)
       if (sessao.empresaAtiva) setEmpresaAtiva(sessao.empresaAtiva)
-    } catch (e) { localStorage.removeItem(SESSION_KEY) }
-    setCarregando(false)
+      setCarregando(false)
+      // Sessão fica guardada no navegador por dias — busca os dados atuais no banco
+      // em segundo plano, pra pegar qualquer mudança que o admin tenha feito
+      // (visibilidade, salário, escala, etc.) sem precisar deslogar e logar de novo.
+      atualizarDadosUsuario(sessao.usuario, sessao.empresaAtiva)
+    } catch (e) { localStorage.removeItem(SESSION_KEY); setCarregando(false) }
   }, [])
+
+  async function atualizarDadosUsuario(usuarioAtual, empresaAtivaAtual) {
+    if (!usuarioAtual?.id) return
+    const { data, error } = await supabase.from('colaboradores').select('*').eq('id', usuarioAtual.id).maybeSingle()
+    if (error || !data) return
+    setUsuario(data)
+    const sessao = { usuario: data, expiraEm: Date.now() + SESSION_DURATION_MS, empresaAtiva: empresaAtivaAtual || null }
+    localStorage.setItem(SESSION_KEY, JSON.stringify(sessao))
+  }
 
   function handleLogin(usuario) {
     const sessao = { usuario, expiraEm: Date.now() + SESSION_DURATION_MS }
@@ -59,11 +72,6 @@ export default function App() {
   )
 
   if (!usuario) return <Login onLogin={handleLogin} />
-
-  // Perfil totem → vai direto para a tela de totem
-  if (usuario.perfil === 'totem') {
-    return <Totem usuario={usuario} onLogout={handleLogout} />
-  }
 
   // Super admin sem empresa → painel de empresas
   if (usuario.super_admin && !empresaAtiva) {

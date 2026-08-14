@@ -7,6 +7,7 @@ const TIPOS_EVENTO = [
     { value: 'meio_cache', label: 'Meio Cachê' },
     { value: 'dia_trabalhado', label: 'Dia Trabalhado' },
     { value: 'feriado_trabalhado', label: 'Feriado Trabalhado' },
+    { value: 'ajuda_custo_extra', label: 'Ajuda de Custo (home office/avulso)' },
 ]
 const TIPOS_DEBITO = [
     { value: 'adiantamento', label: 'Adiantamento' },
@@ -21,12 +22,13 @@ const TIPOS_CREDITO = [
 
 function corEvento(tipo) {
     const mapa = {
-        cache: { bg: 'bg-purple-500 bg-opacity-20', text: 'text-purple-400' },
-        meio_cache: { bg: 'bg-indigo-500 bg-opacity-20', text: 'text-indigo-400' },
-        dia_trabalhado: { bg: 'bg-orange-500 bg-opacity-20', text: 'text-orange-400' },
-        feriado_trabalhado: { bg: 'bg-amber-500 bg-opacity-20', text: 'text-amber-400' },
+        cache: { bg: 'bg-purple-500/20', text: 'text-purple-400' },
+        meio_cache: { bg: 'bg-indigo-500/20', text: 'text-indigo-400' },
+        dia_trabalhado: { bg: 'bg-orange-500/20', text: 'text-orange-400' },
+        feriado_trabalhado: { bg: 'bg-amber-500/20', text: 'text-amber-400' },
+        ajuda_custo_extra: { bg: 'bg-teal-500/20', text: 'text-teal-400' },
     }
-    return mapa[tipo] || { bg: 'bg-gray-500 bg-opacity-20', text: 'text-gray-400' }
+    return mapa[tipo] || { bg: 'bg-gray-500/20', text: 'text-gray-400' }
 }
 function mascaraMoeda(v) { const num = String(v).replace(/\D/g, ''); if (!num) return ''; return (Number(num) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
 function desmascaraMoeda(v) { return Number(String(v).replace(/[R$\s.]/g, '').replace(',', '.')) || 0 }
@@ -38,6 +40,7 @@ export default function RelatorioMensal({ usuario }) {
     const [mes, setMes] = useState(hoje.getMonth())
     const [ano, setAno] = useState(hoje.getFullYear())
     const [colaboradores, setColaboradores] = useState([])
+    const [escalas, setEscalas] = useState([])
     const [colaboradorSel, setColaboradorSel] = useState(null)
     const [registros, setRegistros] = useState([])
     const [lancamentos, setLancamentos] = useState([])
@@ -50,6 +53,8 @@ export default function RelatorioMensal({ usuario }) {
     const [todosEventos, setTodosEventos] = useState([])
     const [todasFaltas, setTodasFaltas] = useState([])
     const [fechamentos, setFechamentos] = useState([])
+    const [fechamentoAtual, setFechamentoAtual] = useState(null)
+    const [saldoAnteriorBanco, setSaldoAnteriorBanco] = useState(0)
     const [expandido, setExpandido] = useState(null)
     const [loadingFechamento, setLoadingFechamento] = useState(false)
     const [aprovando, setAprovando] = useState(null)
@@ -71,6 +76,12 @@ export default function RelatorioMensal({ usuario }) {
     const [exportando, setExportando] = useState(false)
     const [eventosParaAprovar, setEventosParaAprovar] = useState([])
     const [modalAbono, setModalAbono] = useState(null)
+    const [modalExcluirRegistro, setModalExcluirRegistro] = useState(null)
+    const [excluindoRegistro, setExcluindoRegistro] = useState(false)
+    const [registrosAbertos, setRegistrosAbertos] = useState(false)
+    const [modalHistorico, setModalHistorico] = useState(false)
+    const [historicoFechamentos, setHistoricoFechamentos] = useState([])
+    const [carregandoHistorico, setCarregandoHistorico] = useState(false)
     const [justAbono, setJustAbono] = useState('')
     const [salvandoAbono, setSalvandoAbono] = useState(false)
     const [abaAbono, setAbaAbono] = useState('abonar')
@@ -83,16 +94,26 @@ export default function RelatorioMensal({ usuario }) {
     const nomeMes = new Date(ano, mes).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
     const inputCls = 'w-full bg-gray-800 text-white rounded-xl px-3 py-2.5 text-sm border border-gray-700 focus:outline-none focus:border-green-500'
 
-    useEffect(() => { if (isAdmin) carregarColaboradores(); else carregar(usuario.id) }, [])
+    useEffect(() => { if (isAdmin) carregarColaboradores(); else carregar(usuario.id); carregarEscalas() }, [])
     useEffect(() => { if (colaboradorId) carregar(colaboradorId) }, [mes, ano, colaboradorId])
     useEffect(() => { if (isAdmin && colaboradores.length > 0) { carregarFechamento(); carregarEventosPendentes() } }, [mes, ano, colaboradores])
 
     async function carregarColaboradores() {
         const { data } = await supabase.from('colaboradores')
-            .select('id, nome, cargo, salario_fixo, ajuda_custo_diaria, hora_extra_valor, cache_evento, pix, banco, agencia, conta, escala, data_admissao')
+            .select('id, nome, cargo, salario_fixo, ajuda_custo_diaria, ajuda_custo_tipo, hora_extra_valor, cache_evento, pix, banco, agencia, conta, escala, escala_id, data_admissao')
             .eq('empresa_id', usuario.empresa_id).eq('status', 'aprovado').order('nome')
         setColaboradores(data || [])
         if (data?.length > 0) setColaboradorSel(data[0])
+    }
+
+    async function carregarEscalas() {
+        const { data } = await supabase.from('escalas').select('id, horas_diarias_esperadas').eq('empresa_id', usuario.empresa_id)
+        setEscalas(data || [])
+    }
+
+    function horasEsperadasPara(colab) {
+        const escala = escalas.find(e => e.id === colab?.escala_id)
+        return Number(escala?.horas_diarias_esperadas) || 9
     }
 
     async function carregar(colabId) {
@@ -100,16 +121,20 @@ export default function RelatorioMensal({ usuario }) {
         setLoading(true)
         const inicio = `${ano}-${String(mes + 1).padStart(2, '0')}-01`
         const fim = `${ano}-${String(mes + 1).padStart(2, '0')}-${new Date(ano, mes + 1, 0).getDate()}`
-        const [{ data: regs }, { data: lancs }, { data: evs }, { data: sols }, { data: fts }] = await Promise.all([
+        const [{ data: regs }, { data: lancs }, { data: evs }, { data: sols }, { data: fts }, { data: fechAtual }] = await Promise.all([
             supabase.from('registros_ponto').select('*').eq('colaborador_id', colabId).gte('data', inicio).lte('data', fim).order('data'),
             supabase.from('lancamentos').select('*').eq('colaborador_id', colabId).eq('mes', mes + 1).eq('ano', ano).order('criado_em'),
             supabase.from('eventos').select('*').eq('colaborador_id', colabId).gte('data', inicio).lte('data', fim).order('data'),
             supabase.from('solicitacoes_correcao').select('*').eq('colaborador_id', colabId).gte('data', inicio).lte('data', fim),
             supabase.from('faltas').select('*').eq('colaborador_id', colabId).gte('data', inicio).lte('data', fim),
+            supabase.from('fechamentos').select('*').eq('colaborador_id', colabId).eq('mes', mes + 1).eq('ano', ano).maybeSingle(),
         ])
+        setFechamentoAtual(fechAtual || null)
+        setSaldoAnteriorBanco(await buscarSaldoAnterior(colabId))
         const regsLocal = regs || [], ftsLocal = fts || [], evsLocal = evs || []
         const diasMesLocal = new Date(ano, mes + 1, 0).getDate()
         const novasFaltas = []
+        const faltasParaRemover = []
         for (let d = 1; d <= diasMesLocal; d++) {
             const dataStr = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
             const dow = new Date(ano, mes, d).getDay()
@@ -119,18 +144,21 @@ export default function RelatorioMensal({ usuario }) {
                 const temEvento = evsLocal.find(e => e.data === dataStr && e.status === 'aprovado')
                 const faltaExiste = ftsLocal.find(f => f.data === dataStr)
                 if (!temReg && !temEvento && !faltaExiste) novasFaltas.push(dataStr)
-                if (temEvento && faltaExiste) await supabase.from('faltas').delete().eq('id', faltaExiste.id)
+                if ((temEvento || temReg) && faltaExiste?.status === 'falta') faltasParaRemover.push(faltaExiste.id)
             }
         }
         for (const dataStr of novasFaltas) {
             await supabase.from('faltas').upsert({ colaborador_id: colabId, empresa_id: usuario.empresa_id, data: dataStr, status: 'falta' }, { onConflict: 'colaborador_id,data' })
         }
-        const ftsFinais = (novasFaltas.length > 0 || evsLocal.some(e => e.status === 'aprovado'))
+        for (const faltaId of faltasParaRemover) {
+            await supabase.from('faltas').delete().eq('id', faltaId)
+        }
+        const ftsFinais = (novasFaltas.length > 0 || faltasParaRemover.length > 0 || evsLocal.some(e => e.status === 'aprovado'))
             ? (await supabase.from('faltas').select('*').eq('colaborador_id', colabId).gte('data', inicio).lte('data', fim)).data || []
             : ftsLocal
         setRegistros(regsLocal); setLancamentos(lancs || []); setEventos(evsLocal)
         setSolicitacoes(sols || []); setFaltas(ftsFinais); setLoading(false)
-        if (novasFaltas.length > 0 && isAdmin) setTimeout(() => carregarFechamento(), 300)
+        if ((novasFaltas.length > 0 || faltasParaRemover.length > 0) && isAdmin) setTimeout(() => carregarFechamento(), 300)
     }
 
     async function carregarFechamento() {
@@ -176,11 +204,10 @@ export default function RelatorioMensal({ usuario }) {
 
     function valorParaTipo(tipo, colab) {
         const sal = Number(colab?.salario_fixo || 0)
-        let diasUteis = 0
-        for (let d = 1; d <= new Date(ano, mes + 1, 0).getDate(); d++) { const dow = new Date(ano, mes, d).getDay(); if (dow !== 0 && dow !== 6) diasUteis++ }
         if (tipo === 'cache') return colab?.cache_evento ? numParaMoeda(colab.cache_evento) : ''
         if (tipo === 'meio_cache') return colab?.cache_evento ? numParaMoeda(Number(colab.cache_evento) / 2) : ''
-        if (tipo === 'dia_trabalhado' || tipo === 'feriado_trabalhado') return sal ? numParaMoeda(sal / diasUteis) : ''
+        if (tipo === 'dia_trabalhado' || tipo === 'feriado_trabalhado') return sal ? numParaMoeda(sal / 30) : ''
+        if (tipo === 'ajuda_custo_extra') return colab?.ajuda_custo_diaria ? numParaMoeda(colab.ajuda_custo_diaria) : ''
         return ''
     }
 
@@ -191,25 +218,63 @@ export default function RelatorioMensal({ usuario }) {
     function countEventos(tipo, evs) { return (evs || eventos).filter(e => e.tipo === tipo && e.status === 'aprovado').length }
     function somaLanc(tipo, lancs) { return (lancs || lancamentos).filter(l => l.tipo === tipo).reduce((a, l) => a + Number(l.valor || 0) * Number(l.quantidade || 1), 0) }
 
-    function calcularTotal(colab, regsC, lancsC, evsC, faltasC) {
+    function calcularTotal(colab, regsC, lancsC, evsC, faltasC, pagarHoraExtra, descontarHoraMenos) {
         const dias = regsC.filter(r => r.entrada).length
         const horas = regsC.reduce((a, r) => a + (r.horas_trabalhadas || 0), 0)
         const salario = Number(colab.salario_fixo || 0)
-        const ajuda = Number(colab.ajuda_custo_diaria || 0)
+        const ajudaValor = Number(colab.ajuda_custo_diaria || 0)
         const cache = somaEventos('cache', evsC); const nCache = countEventos('cache', evsC)
         const mCache = somaEventos('meio_cache', evsC); const nMCache = countEventos('meio_cache', evsC)
         const diaTrab = somaEventos('dia_trabalhado', evsC); const nDiaTrab = countEventos('dia_trabalhado', evsC)
         const ferTrab = somaEventos('feriado_trabalhado', evsC); const nFerTrab = countEventos('feriado_trabalhado', evsC)
+        const ajudaExtra = somaEventos('ajuda_custo_extra', evsC); const nAjudaExtra = countEventos('ajuda_custo_extra', evsC)
         const fer = somaLanc('ferias', lancsC); const dec = somaLanc('decimo_terceiro', lancsC)
         const bonus = somaLanc('bonus', lancsC); const moradia = somaLanc('ajuda_moradia', lancsC)
-        const hExtra = Number((Math.max(0, horas - dias * 9) * Number(colab.hora_extra_valor || 0)).toFixed(2))
+
+        // Banco de horas: compara cada dia com registro completo (entrada + saída)
+        // contra as horas esperadas da escala do colaborador. As horas a mais e a
+        // menos são somadas SEPARADAS (não se cancelam automaticamente).
+        // Cada uma tem seu próprio interruptor: pagar/descontar em dinheiro, ou deixar
+        // no banco de horas (só informativo, some pro saldo acumulado do mês seguinte).
+        const horasEsperadasDia = horasEsperadasPara(colab)
+        let bancoHorasExtras = 0, bancoHorasFaltantes = 0
+        regsC.forEach(r => {
+            if (r.entrada && r.saida && r.horas_trabalhadas != null) {
+                const diff = Number(r.horas_trabalhadas) - horasEsperadasDia
+                if (diff > 0) bancoHorasExtras += diff
+                else bancoHorasFaltantes += Math.abs(diff)
+            }
+        })
+        bancoHorasExtras = Number(bancoHorasExtras.toFixed(2))
+        bancoHorasFaltantes = Number(bancoHorasFaltantes.toFixed(2))
+        const valorHora = Number(colab.hora_extra_valor || 0)
+        const hExtra = pagarHoraExtra ? Number((bancoHorasExtras * valorHora).toFixed(2)) : 0
+        const descontoHorasMenos = descontarHoraMenos ? Number((bancoHorasFaltantes * valorHora).toFixed(2)) : 0
+
         const adiant = somaLanc('adiantamento', lancsC); const desc = somaLanc('desconto', lancsC)
         let diasUteisMes = 0
         for (let d = 1; d <= diasNoMes; d++) { const dow = new Date(ano, mes, d).getDay(); if (dow !== 0 && dow !== 6) diasUteisMes++ }
         const faltasNaoAbonadas = (faltasC || []).filter(f => f.status === 'falta').length
         const descontoFalta = salario > 0 && diasUteisMes > 0 ? (salario / diasUteisMes) * faltasNaoAbonadas : 0
-        const total = salario + ajuda + cache + mCache + diaTrab + ferTrab + fer + dec + bonus + moradia + hExtra - adiant - desc - descontoFalta
-        return { dias, horas, salario, ajuda, cache, nCache, mCache, nMCache, diaTrab, nDiaTrab, ferTrab, nFerTrab, fer, dec, bonus, moradia, hExtra, adiant, desc, faltasNaoAbonadas, descontoFalta, diasUteisMes, total }
+        // Ajuda de custo: se for "por dia", já nasce proporcional (só conta dias com entrada).
+        // Se for "fixo", desconta proporcionalmente pelas faltas não abonadas do mês.
+        // "ajudaExtra" é um crédito avulso (ex: home office) lançado manualmente via evento,
+        // some da conta de dias — soma direto, não depende de ter batido ponto naquele dia.
+        const ajudaBase = (colab.ajuda_custo_tipo === 'por_dia' ? ajudaValor * dias : ajudaValor) + ajudaExtra
+        const descontoAjudaFalta = colab.ajuda_custo_tipo === 'fixo' && ajudaValor > 0 && diasUteisMes > 0
+            ? (ajudaValor / diasUteisMes) * faltasNaoAbonadas : 0
+        const ajuda = Math.max(0, ajudaBase - descontoAjudaFalta)
+        const total = salario + ajuda + cache + mCache + diaTrab + ferTrab + fer + dec + bonus + moradia + hExtra - adiant - desc - descontoFalta - descontoHorasMenos
+        return { dias, horas, salario, ajuda, ajudaExtra, nAjudaExtra, descontoAjudaFalta, cache, nCache, mCache, nMCache, diaTrab, nDiaTrab, ferTrab, nFerTrab, fer, dec, bonus, moradia, hExtra, descontoHorasMenos, bancoHorasExtras, bancoHorasFaltantes, pagarHoraExtra: !!pagarHoraExtra, descontarHoraMenos: !!descontarHoraMenos, adiant, desc, faltasNaoAbonadas, descontoFalta, diasUteisMes, total }
+    }
+
+    async function excluirRegistroPonto() {
+        if (!modalExcluirRegistro) return
+        setExcluindoRegistro(true)
+        await supabase.from('registros_ponto').delete().eq('id', modalExcluirRegistro.id)
+        setModalExcluirRegistro(null); setExcluindoRegistro(false)
+        const colabId = isAdmin ? colaboradorSel?.id : usuario.id
+        carregar(colabId); if (isAdmin) carregarFechamento()
     }
 
     async function sincronizarFaltas(colabId, regsC, faltasC) {
@@ -220,7 +285,12 @@ export default function RelatorioMensal({ usuario }) {
             if (dow !== 0 && dow !== 6 && passado) {
                 const reg = regsC.find(r => r.data === dataStr)
                 const faltaExiste = faltasC.find(f => f.data === dataStr)
-                if (!reg?.entrada && !faltaExiste) await supabase.from('faltas').upsert({ colaborador_id: colabId, empresa_id: usuario.empresa_id, data: dataStr, status: 'falta' }, { onConflict: 'colaborador_id,data' })
+                if (!reg?.entrada && !faltaExiste) {
+                    await supabase.from('faltas').upsert({ colaborador_id: colabId, empresa_id: usuario.empresa_id, data: dataStr, status: 'falta' }, { onConflict: 'colaborador_id,data' })
+                } else if (reg?.entrada && faltaExiste?.status === 'falta') {
+                    // O colaborador bateu o ponto depois que a falta foi gerada — remove a falta desatualizada.
+                    await supabase.from('faltas').delete().eq('id', faltaExiste.id)
+                }
             }
         }
         carregar(colabId); if (isAdmin) carregarFechamento()
@@ -245,7 +315,17 @@ export default function RelatorioMensal({ usuario }) {
             horasTrabalhadas = ((hS * 60 + mS) - (hE * 60 + mE)) / 60
             if (horasTrabalhadas < 0) horasTrabalhadas += 24
         }
-        await supabase.from('registros_ponto').upsert({ colaborador_id: colabId, empresa_id: usuario.empresa_id, data: dataStr, entrada: formPontoFalta.entrada + ':00', saida: formPontoFalta.saida ? formPontoFalta.saida + ':00' : null, horas_trabalhadas: horasTrabalhadas }, { onConflict: 'colaborador_id,data' })
+        // A coluna é timestamp completo (data + hora), não só hora — precisa juntar com a data da falta.
+        const entradaISO = new Date(`${dataStr}T${formPontoFalta.entrada}:00`).toISOString()
+        const saidaISO = formPontoFalta.saida ? new Date(`${dataStr}T${formPontoFalta.saida}:00`).toISOString() : null
+        // Não usa upsert com onConflict (a tabela não tem essa constraint única) —
+        // busca se já existe um registro nesse dia e decide entre update ou insert.
+        const { data: existente } = await supabase.from('registros_ponto').select('id').eq('colaborador_id', colabId).eq('data', dataStr).maybeSingle()
+        const payload = { colaborador_id: colabId, empresa_id: usuario.empresa_id, data: dataStr, entrada: entradaISO, saida: saidaISO, horas_trabalhadas: horasTrabalhadas }
+        const { error } = existente
+            ? await supabase.from('registros_ponto').update(payload).eq('id', existente.id)
+            : await supabase.from('registros_ponto').insert(payload)
+        if (error) { setSalvandoAbono(false); alert('Erro ao salvar o ponto: ' + error.message); return }
         await supabase.from('faltas').delete().eq('id', modalAbono.falta.id)
         setSalvandoAbono(false); setModalAbono(null)
         carregar(colabId); if (isAdmin) carregarFechamento()
@@ -311,9 +391,39 @@ export default function RelatorioMensal({ usuario }) {
 
     async function excluirLancamento(id) { await supabase.from('lancamentos').delete().eq('id', id); carregar(colaboradorId); carregarFechamento() }
 
-    async function aprovarColaborador(colabId, total) {
+    async function abrirHistorico() {
+        if (!colaboradorSel) return
+        setModalHistorico(true); setCarregandoHistorico(true)
+        const { data } = await supabase.from('fechamentos').select('*').eq('colaborador_id', colaboradorSel.id).order('ano', { ascending: false }).order('mes', { ascending: false })
+        setHistoricoFechamentos(data || [])
+        setCarregandoHistorico(false)
+    }
+
+    async function togglePagarHoraExtra(colabId, valorAtual) {
+        const { error } = await supabase.from('fechamentos').upsert({ empresa_id: usuario.empresa_id, colaborador_id: colabId, mes: mes + 1, ano, pagar_hora_extra: !valorAtual }, { onConflict: 'colaborador_id,mes,ano' })
+        if (error) { alert('Erro ao salvar: ' + error.message + '\n\nSe a mensagem falar da coluna "pagar_hora_extra", rode o script adicionar-banco-de-horas.sql no Supabase.'); return }
+        carregarFechamento()
+    }
+
+    async function toggleDescontarHoraMenos(colabId, valorAtual) {
+        const { error } = await supabase.from('fechamentos').upsert({ empresa_id: usuario.empresa_id, colaborador_id: colabId, mes: mes + 1, ano, descontar_hora_menos: !valorAtual }, { onConflict: 'colaborador_id,mes,ano' })
+        if (error) { alert('Erro ao salvar: ' + error.message); return }
+        carregarFechamento()
+    }
+
+    async function buscarSaldoAnterior(colabId) {
+        let mesAnt = mes, anoAnt = ano
+        mesAnt -= 1
+        if (mesAnt < 0) { mesAnt = 11; anoAnt -= 1 }
+        const { data } = await supabase.from('fechamentos').select('saldo_banco_horas').eq('colaborador_id', colabId).eq('mes', mesAnt + 1).eq('ano', anoAnt).maybeSingle()
+        return Number(data?.saldo_banco_horas) || 0
+    }
+
+    async function aprovarColaborador(colabId, total, calc) {
         setAprovando(colabId)
-        await supabase.from('fechamentos').upsert({ empresa_id: usuario.empresa_id, colaborador_id: colabId, mes: mes + 1, ano, aprovado: true, aprovado_em: new Date().toISOString(), aprovado_por: usuario.id, total_liquido: total }, { onConflict: 'colaborador_id,mes,ano' })
+        const saldoAnterior = await buscarSaldoAnterior(colabId)
+        const saldoNovo = saldoAnterior + (calc?.pagarHoraExtra ? 0 : (calc?.bancoHorasExtras || 0)) - (calc?.descontarHoraMenos ? 0 : (calc?.bancoHorasFaltantes || 0))
+        await supabase.from('fechamentos').upsert({ empresa_id: usuario.empresa_id, colaborador_id: colabId, mes: mes + 1, ano, aprovado: true, aprovado_em: new Date().toISOString(), aprovado_por: usuario.id, total_liquido: total, saldo_banco_horas: Number(saldoNovo.toFixed(2)) }, { onConflict: 'colaborador_id,mes,ano' })
         setAprovando(null); carregarFechamento(); setExpandido(null)
     }
 
@@ -332,6 +442,8 @@ export default function RelatorioMensal({ usuario }) {
         setSucessoSol(true); setEnviandoSol(false); carregar(usuario.id)
     }
 
+    function r2(v) { return Math.round((Number(v) || 0) * 100) / 100 }
+
     async function exportarXlsx(colabsIds, mesEx, anoEx) {
         setExportando(true)
         const diasMes = new Date(anoEx, mesEx + 1, 0).getDate()
@@ -340,11 +452,12 @@ export default function RelatorioMensal({ usuario }) {
         const mesNome = new Date(anoEx, mesEx).toLocaleDateString('pt-BR', { month: 'long' })
         const diasSemana = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado']
         const colabsEx = colaboradores.filter(c => colabsIds.includes(c.id))
-        const [{ data: regsEx }, { data: lancsEx }, { data: evsEx }, { data: ftsEx }] = await Promise.all([
+        const [{ data: regsEx }, { data: lancsEx }, { data: evsEx }, { data: ftsEx }, { data: fechsEx }] = await Promise.all([
             supabase.from('registros_ponto').select('*').in('colaborador_id', colabsIds).gte('data', inicio).lte('data', fim),
             supabase.from('lancamentos').select('*').in('colaborador_id', colabsIds).eq('mes', mesEx + 1).eq('ano', anoEx),
             supabase.from('eventos').select('*').in('colaborador_id', colabsIds).gte('data', inicio).lte('data', fim).eq('status', 'aprovado'),
             supabase.from('faltas').select('*').in('colaborador_id', colabsIds).gte('data', inicio).lte('data', fim),
+            supabase.from('fechamentos').select('*').in('colaborador_id', colabsIds).eq('mes', mesEx + 1).eq('ano', anoEx),
         ])
         const wb = XLSX.utils.book_new()
         for (const colab of colabsEx) {
@@ -352,7 +465,9 @@ export default function RelatorioMensal({ usuario }) {
             const lancsC = (lancsEx || []).filter(l => l.colaborador_id === colab.id)
             const evsC = (evsEx || []).filter(e => e.colaborador_id === colab.id)
             const ftsC = (ftsEx || []).filter(f => f.colaborador_id === colab.id)
-            const calc = calcularTotal(colab, regsC, lancsC, evsC, ftsC)
+            const pagarHoraExtra = (fechsEx || []).find(f => f.colaborador_id === colab.id)?.pagar_hora_extra || false
+            const descontarHoraMenos = (fechsEx || []).find(f => f.colaborador_id === colab.id)?.descontar_hora_menos || false
+            const calc = calcularTotal(colab, regsC, lancsC, evsC, ftsC, pagarHoraExtra, descontarHoraMenos)
             const rows = [['DATA', 'DIA', 'STATUS', 'TIPO', 'DESCRIÇÃO', '', 'ENTRADA', 'SAÍDA', 'HORAS']]
             for (let d = 1; d <= diasMes; d++) {
                 const dataStr = `${anoEx}-${String(mesEx + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
@@ -366,21 +481,23 @@ export default function RelatorioMensal({ usuario }) {
             const linhaBase = diasMes + 3
             const fin = [
                 ['RESUMO FINANCEIRO', '', '', 'QTD', 'VALOR UNIT.', 'TOTAL'],
-                ['Salário Fixo', '', '', 1, calc.salario, calc.salario],
-                ['Ajuda de Custo', '', '', 1, calc.ajuda, calc.ajuda],
-                ['Cachê', '', '', calc.nCache, calc.nCache ? calc.cache / calc.nCache : 0, calc.cache],
-                ['Meio Cachê', '', '', calc.nMCache, calc.nMCache ? calc.mCache / calc.nMCache : 0, calc.mCache],
-                ['Dia Trabalhado', '', '', calc.nDiaTrab, calc.nDiaTrab ? calc.diaTrab / calc.nDiaTrab : 0, calc.diaTrab],
-                ['Feriado Trabalhado', '', '', calc.nFerTrab, calc.nFerTrab ? calc.ferTrab / calc.nFerTrab : 0, calc.ferTrab],
-                ['Férias', '', '', '', '', calc.fer], ['Décimo Terceiro', '', '', '', '', calc.dec],
-                ['Bônus', '', '', '', '', calc.bonus], ['Ajuda Moradia', '', '', '', '', calc.moradia],
-                ['Horas Extra', '', '', '', '', calc.hExtra], ['', '', '', '', '', ''],
-                ['TOTAL BRUTO', '', '', '', '', calc.salario + calc.ajuda + calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia + calc.hExtra],
+                ['Salário Fixo', '', '', 1, r2(calc.salario), r2(calc.salario)],
+                ['Ajuda de Custo', '', '', 1, r2(calc.ajuda), r2(calc.ajuda)],
+                ['Cachê', '', '', calc.nCache, r2(calc.nCache ? calc.cache / calc.nCache : 0), r2(calc.cache)],
+                ['Meio Cachê', '', '', calc.nMCache, r2(calc.nMCache ? calc.mCache / calc.nMCache : 0), r2(calc.mCache)],
+                ['Dia Trabalhado', '', '', calc.nDiaTrab, r2(calc.nDiaTrab ? calc.diaTrab / calc.nDiaTrab : 0), r2(calc.diaTrab)],
+                ['Feriado Trabalhado', '', '', calc.nFerTrab, r2(calc.nFerTrab ? calc.ferTrab / calc.nFerTrab : 0), r2(calc.ferTrab)],
+                ['Férias', '', '', '', '', r2(calc.fer)], ['Décimo Terceiro', '', '', '', '', r2(calc.dec)],
+                ['Bônus', '', '', '', '', r2(calc.bonus)], ['Ajuda Moradia', '', '', '', '', r2(calc.moradia)],
+                ['Horas Extra', '', '', '', '', r2(calc.hExtra)], ['', '', '', '', '', ''],
+                ['TOTAL BRUTO', '', '', '', '', r2(calc.salario + calc.ajuda + calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia + calc.hExtra)],
                 ['', '', '', '', '', ''], ['DESCONTOS', '', '', 'QTD', 'VALOR UNIT.', 'TOTAL'],
-                ['Faltas', '', '', calc.faltasNaoAbonadas, calc.diasUteisMes > 0 ? calc.salario / calc.diasUteisMes : 0, -calc.descontoFalta],
-                ['Adiantamento', '', '', '', '', -calc.adiant], ['Desconto', '', '', '', '', -calc.desc],
-                ['TOTAL DESCONTOS', '', '', '', '', -(calc.descontoFalta + calc.adiant + calc.desc)],
-                ['', '', '', '', '', ''], ['TOTAL LÍQUIDO', '', '', '', '', calc.total],
+                ['Faltas', '', '', calc.faltasNaoAbonadas, r2(calc.diasUteisMes > 0 ? calc.salario / calc.diasUteisMes : 0), r2(-calc.descontoFalta)],
+                ['Ajuda de custo (faltas)', '', '', '', '', r2(-calc.descontoAjudaFalta)],
+                ['Horas a menos', '', '', calc.bancoHorasFaltantes, colab.hora_extra_valor || 0, r2(-calc.descontoHorasMenos)],
+                ['Adiantamento', '', '', '', '', r2(-calc.adiant)], ['Desconto', '', '', '', '', r2(-calc.desc)],
+                ['TOTAL DESCONTOS', '', '', '', '', r2(-(calc.descontoFalta + calc.descontoAjudaFalta + calc.descontoHorasMenos + calc.adiant + calc.desc))],
+                ['', '', '', '', '', ''], ['TOTAL LÍQUIDO', '', '', '', '', r2(calc.total)],
                 ['', '', '', '', '', ''], ['DADOS BANCÁRIOS', '', '', '', '', ''],
                 ['Banco', '', '', '', '', colab.banco || ''], ['Agência', '', '', '', '', colab.agencia || ''],
                 ['Conta', '', '', '', '', colab.conta || ''], ['PIX', '', '', '', '', colab.pix || ''],
@@ -397,8 +514,10 @@ export default function RelatorioMensal({ usuario }) {
             colabsEx.forEach(c => {
                 const regsC = (regsEx || []).filter(r => r.colaborador_id === c.id); const lancsC = (lancsEx || []).filter(l => l.colaborador_id === c.id)
                 const evsC = (evsEx || []).filter(e => e.colaborador_id === c.id); const ftsC = (ftsEx || []).filter(f => f.colaborador_id === c.id)
-                const calc = calcularTotal(c, regsC, lancsC, evsC, ftsC)
-                rowsGeral.push([c.nome, c.cargo || '', `${c.banco || ''} Ag:${c.agencia || ''} Cc:${c.conta || ''}`, c.pix || '', calc.dias, Number(calc.horas.toFixed(1)), calc.salario, calc.ajuda, calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia, calc.hExtra, -calc.descontoFalta, -(calc.adiant + calc.desc), calc.total])
+                const pagarHoraExtra = (fechsEx || []).find(f => f.colaborador_id === c.id)?.pagar_hora_extra || false
+                const descontarHoraMenos = (fechsEx || []).find(f => f.colaborador_id === c.id)?.descontar_hora_menos || false
+                const calc = calcularTotal(c, regsC, lancsC, evsC, ftsC, pagarHoraExtra, descontarHoraMenos)
+                rowsGeral.push([c.nome, c.cargo || '', `${c.banco || ''} Ag:${c.agencia || ''} Cc:${c.conta || ''}`, c.pix || '', calc.dias, Number(calc.horas.toFixed(1)), r2(calc.salario), r2(calc.ajuda), r2(calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia), r2(calc.hExtra), r2(-calc.descontoFalta), r2(-(calc.descontoAjudaFalta + calc.descontoHorasMenos + calc.adiant + calc.desc)), r2(calc.total)])
             })
             const wsGeral = XLSX.utils.aoa_to_sheet(rowsGeral)
             wsGeral['!cols'] = [{ wch: 22 }, { wch: 18 }, { wch: 28 }, { wch: 20 }, { wch: 6 }, { wch: 7 }, { wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 14 }]
@@ -440,10 +559,36 @@ export default function RelatorioMensal({ usuario }) {
         )
     }
 
+    // Banco de horas do colaborador (view própria) — segue a permissão "pode_ver_horas",
+    // independente do resumo financeiro (pode_ver_resumo).
+    function BancoHorasColaborador() {
+        const colab = { ...usuario, salario_fixo: usuario.salario_fixo || 0, ajuda_custo_diaria: usuario.ajuda_custo_diaria || 0, ajuda_custo_tipo: usuario.ajuda_custo_tipo || 'fixo', hora_extra_valor: usuario.hora_extra_valor || 0, cache_evento: usuario.cache_evento || 0 }
+        const calc = calcularTotal(colab, registros, lancamentos, eventos, faltas, fechamentoAtual?.pagar_hora_extra || false, fechamentoAtual?.descontar_hora_menos || false)
+        if (saldoAnteriorBanco === 0 && calc.bancoHorasExtras === 0 && calc.bancoHorasFaltantes === 0) return null
+        return (
+            <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
+                <h3 className="text-white font-bold mb-4">Banco de horas</h3>
+                {saldoAnteriorBanco !== 0 && <p className="text-gray-400 text-xs mb-3">Saldo do mês anterior: <span className={`font-semibold ${saldoAnteriorBanco > 0 ? 'text-green-400' : 'text-red-400'}`}>{saldoAnteriorBanco > 0 ? '+' : ''}{saldoAnteriorBanco.toFixed(1)}h</span></p>}
+                {(calc.bancoHorasExtras > 0 || calc.bancoHorasFaltantes > 0) && (
+                    <div className="grid grid-cols-3 gap-2 mb-4">
+                        <div className="bg-green-500/10 border border-green-500/30 rounded-xl px-3 py-2"><p className="text-green-400 text-xs">Horas a mais</p><p className="text-white font-bold text-sm">+{calc.bancoHorasExtras.toFixed(1)}h</p></div>
+                        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-3 py-2"><p className="text-yellow-400 text-xs">Horas a menos</p><p className="text-white font-bold text-sm">-{calc.bancoHorasFaltantes.toFixed(1)}h</p></div>
+                        <div className={`rounded-xl px-3 py-2 border ${(calc.bancoHorasExtras - calc.bancoHorasFaltantes) >= 0 ? 'bg-green-500/10 border-green-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
+                            <p className={`text-xs ${(calc.bancoHorasExtras - calc.bancoHorasFaltantes) >= 0 ? 'text-green-400' : 'text-red-400'}`}>Saldo do mês</p>
+                            <p className={`font-bold text-sm ${(calc.bancoHorasExtras - calc.bancoHorasFaltantes) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{(calc.bancoHorasExtras - calc.bancoHorasFaltantes) >= 0 ? '+' : ''}{(calc.bancoHorasExtras - calc.bancoHorasFaltantes).toFixed(1)}h</p>
+                        </div>
+                    </div>
+                )}
+                {calc.bancoHorasExtras > 0 && <p className="text-gray-500 text-xs mb-2">{calc.pagarHoraExtra ? '✅ Horas a mais deste mês estão sendo pagas.' : 'ℹ️ Horas a mais deste mês entraram como banco de horas (não pagas em dinheiro).'}</p>}
+                {calc.bancoHorasFaltantes > 0 && <p className="text-gray-500 text-xs">{calc.descontarHoraMenos ? '⚠️ Horas a menos deste mês estão sendo descontadas.' : 'ℹ️ Horas a menos deste mês entraram como banco de horas (não descontadas).'}</p>}
+            </div>
+        )
+    }
+
     // Resumo financeiro do colaborador (view própria)
     function ResumoColaborador() {
-        const colab = { ...usuario, salario_fixo: usuario.salario_fixo || 0, ajuda_custo_diaria: usuario.ajuda_custo_diaria || 0, hora_extra_valor: usuario.hora_extra_valor || 0, cache_evento: usuario.cache_evento || 0 }
-        const calc = calcularTotal(colab, registros, lancamentos, eventos, faltas)
+        const colab = { ...usuario, salario_fixo: usuario.salario_fixo || 0, ajuda_custo_diaria: usuario.ajuda_custo_diaria || 0, ajuda_custo_tipo: usuario.ajuda_custo_tipo || 'fixo', hora_extra_valor: usuario.hora_extra_valor || 0, cache_evento: usuario.cache_evento || 0 }
+        const calc = calcularTotal(colab, registros, lancamentos, eventos, faltas, fechamentoAtual?.pagar_hora_extra || false, fechamentoAtual?.descontar_hora_menos || false)
         const bruto = calc.salario + calc.ajuda + calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia + calc.hExtra
         return (
             <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
@@ -461,11 +606,14 @@ export default function RelatorioMensal({ usuario }) {
                     {calc.moradia > 0 && <div className="flex justify-between px-3 py-2 bg-gray-800 rounded-lg"><span className="text-gray-400 text-xs">Ajuda Moradia</span><span className="text-white text-xs font-semibold">{brl(calc.moradia)}</span></div>}
                     {calc.hExtra > 0 && <div className="flex justify-between px-3 py-2 bg-gray-800 rounded-lg"><span className="text-gray-400 text-xs">Horas Extra</span><span className="text-white text-xs font-semibold">{brl(calc.hExtra)}</span></div>}
                     {calc.descontoFalta > 0 && <div className="flex justify-between px-3 py-2 bg-gray-800 rounded-lg"><span className="text-gray-400 text-xs">Faltas — {calc.faltasNaoAbonadas}x</span><span className="text-red-400 text-xs font-semibold">-{brl(calc.descontoFalta)}</span></div>}
+                    {calc.ajudaExtra > 0 && <div className="flex justify-between px-3 py-2 bg-gray-800 rounded-lg"><span className="text-gray-400 text-xs">Ajuda de custo extra (home office) — {calc.nAjudaExtra}x</span><span className="text-teal-400 text-xs font-semibold">{brl(calc.ajudaExtra)}</span></div>}
+                    {calc.descontoAjudaFalta > 0 && <div className="flex justify-between px-3 py-2 bg-gray-800 rounded-lg"><span className="text-gray-400 text-xs">Ajuda de custo descontada (faltas)</span><span className="text-red-400 text-xs font-semibold">-{brl(calc.descontoAjudaFalta)}</span></div>}
+                    {calc.descontoHorasMenos > 0 && <div className="flex justify-between px-3 py-2 bg-gray-800 rounded-lg"><span className="text-gray-400 text-xs">Horas a menos — {calc.bancoHorasFaltantes.toFixed(1)}h</span><span className="text-red-400 text-xs font-semibold">-{brl(calc.descontoHorasMenos)}</span></div>}
                     {calc.adiant > 0 && <div className="flex justify-between px-3 py-2 bg-gray-800 rounded-lg"><span className="text-gray-400 text-xs">Adiantamentos</span><span className="text-red-400 text-xs font-semibold">-{brl(calc.adiant)}</span></div>}
                     {calc.desc > 0 && <div className="flex justify-between px-3 py-2 bg-gray-800 rounded-lg"><span className="text-gray-400 text-xs">Descontos</span><span className="text-red-400 text-xs font-semibold">-{brl(calc.desc)}</span></div>}
                     <div className="border-t border-gray-700 mt-2 pt-2 space-y-1">
                         <div className="flex justify-between px-3 py-1"><span className="text-gray-400 text-xs">Total bruto</span><span className="text-green-400 text-xs font-bold">{brl(bruto)}</span></div>
-                        <div className="flex justify-between px-3 py-1"><span className="text-gray-400 text-xs">Descontos</span><span className="text-red-400 text-xs font-bold">-{brl(calc.descontoFalta + calc.adiant + calc.desc)}</span></div>
+                        <div className="flex justify-between px-3 py-1"><span className="text-gray-400 text-xs">Descontos</span><span className="text-red-400 text-xs font-bold">-{brl(calc.descontoFalta + calc.descontoHorasMenos + calc.adiant + calc.desc)}</span></div>
                         <div className="flex justify-between bg-gray-700 rounded-lg px-3 py-2"><span className="text-white text-sm font-bold">Total líquido</span><span className="text-white text-sm font-bold">{brl(calc.total)}</span></div>
                     </div>
                 </div>
@@ -482,6 +630,7 @@ export default function RelatorioMensal({ usuario }) {
                         <select className="bg-gray-800 text-white rounded-xl px-3 py-2 text-sm border border-gray-700 focus:outline-none focus:border-green-500 cursor-pointer" value={colaboradorSel?.id || ''} onChange={e => setColaboradorSel(colaboradores.find(c => c.id === e.target.value))}>
                             {colaboradores.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
                         </select>
+                        <button onClick={abrirHistorico} disabled={!colaboradorSel} className="text-gray-400 hover:text-white text-sm font-semibold w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer disabled:opacity-40 underline decoration-dotted">📊 Histórico</button>
                     </div>
                     <div className="flex gap-2 flex-wrap">
                         {eventosParaAprovar.length > 0 && <span className="bg-yellow-500 text-black text-xs font-bold px-3 py-1.5 rounded-xl">{eventosParaAprovar.length} evento{eventosParaAprovar.length > 1 ? 's' : ''} pendente{eventosParaAprovar.length > 1 ? 's' : ''}</span>}
@@ -500,7 +649,7 @@ export default function RelatorioMensal({ usuario }) {
                         <span className="text-gray-400">Cargo: <span className="text-white font-semibold">{colaboradorSel.cargo || '—'}</span></span>
                         <span className="text-gray-400">Escala: <span className="text-white font-semibold">{colaboradorSel.escala || '—'}</span></span>
                         <span className="text-gray-400">Salário: <span className="text-white font-semibold">{brl(colaboradorSel.salario_fixo)}</span></span>
-                        <span className="text-gray-400">Ajuda custo: <span className="text-white font-semibold">{brl(colaboradorSel.ajuda_custo_diaria)}</span></span>
+                        <span className="text-gray-400">Ajuda custo: <span className="text-white font-semibold">{brl(colaboradorSel.ajuda_custo_diaria)}{colaboradorSel.ajuda_custo_tipo === 'por_dia' ? '/dia presencial' : '/mês'}</span></span>
                         <span className="text-gray-400">Cachê: <span className="text-white font-semibold">{brl(colaboradorSel.cache_evento)}</span></span>
                         <span className="text-gray-400">H. extra: <span className="text-white font-semibold">{brl(colaboradorSel.hora_extra_valor)}/h</span></span>
                         <span className="text-gray-400">Admissão: <span className="text-white font-semibold">{colaboradorSel.data_admissao ? new Date(colaboradorSel.data_admissao + 'T00:00:00').toLocaleDateString('pt-BR') : '—'}</span></span>
@@ -510,11 +659,13 @@ export default function RelatorioMensal({ usuario }) {
                             const lancsC = todosLancs.filter(l => l.colaborador_id === colaboradorSel?.id)
                             const evsC = todosEventos.filter(e => e.colaborador_id === colaboradorSel?.id)
                             const ftsC = todasFaltas.filter(f => f.colaborador_id === colaboradorSel?.id)
-                            const calc = calcularTotal(colaboradorSel, regsC, lancsC, evsC, ftsC)
+                            const pagarHoraExtra = fechamentos.find(f => f.colaborador_id === colaboradorSel?.id)?.pagar_hora_extra || false
+                            const descontarHoraMenos = fechamentos.find(f => f.colaborador_id === colaboradorSel?.id)?.descontar_hora_menos || false
+                            const calc = calcularTotal(colaboradorSel, regsC, lancsC, evsC, ftsC, pagarHoraExtra, descontarHoraMenos)
                             return (
                                 <div className="flex flex-wrap gap-3 border-t border-gray-700 pt-2 mt-1 w-full">
                                     <span className="text-gray-400">Total bruto: <span className="text-green-400 font-bold">{brl(calc.salario + calc.ajuda + calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia + calc.hExtra)}</span></span>
-                                    <span className="text-gray-400">Descontos: <span className="text-red-400 font-bold">-{brl(calc.descontoFalta + calc.adiant + calc.desc)}</span></span>
+                                    <span className="text-gray-400">Descontos: <span className="text-red-400 font-bold">-{brl(calc.descontoFalta + calc.descontoHorasMenos + calc.adiant + calc.desc)}</span></span>
                                     <span className="text-gray-400">Total líquido: <span className="text-white font-bold">{brl(calc.total)}</span></span>
                                 </div>
                             )
@@ -530,9 +681,31 @@ export default function RelatorioMensal({ usuario }) {
                     <h2 className="text-white font-bold text-base capitalize">{nomeMes}</h2>
                     <button onClick={() => mudarMes(1)} disabled={mes === hoje.getMonth() && ano === hoje.getFullYear()} className="w-8 h-8 flex items-center justify-center rounded-xl bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-30 cursor-pointer transition-colors text-lg">›</button>
                 </div>
-                <div className="flex gap-3 mb-4">
+                <div className="flex gap-3 mb-4 flex-wrap">
                     <div className="bg-gray-800 rounded-xl px-4 py-2 flex items-center gap-2"><span className="text-gray-400 text-xs">Dias trabalhados:</span><span className="text-white font-bold">{diasTrabalhados}</span></div>
-                    <div className="bg-gray-800 rounded-xl px-4 py-2 flex items-center gap-2"><span className="text-gray-400 text-xs">Total de horas:</span><span className="text-white font-bold">{totalHoras.toFixed(1)}h</span></div>
+                    {(isAdmin || usuario.pode_ver_horas !== false) && <div className="bg-gray-800 rounded-xl px-4 py-2 flex items-center gap-2"><span className="text-gray-400 text-xs">Total de horas:</span><span className="text-white font-bold">{totalHoras.toFixed(1)}h</span></div>}
+                    {(isAdmin || usuario.pode_ver_horas !== false) && (() => {
+                        const colabParaBanco = isAdmin ? colaboradorSel : usuario
+                        if (!colabParaBanco) return null
+                        const horasEsperadasDia = horasEsperadasPara(colabParaBanco)
+                        let extras = 0, faltantes = 0
+                        registros.forEach(r => {
+                            if (r.entrada && r.saida && r.horas_trabalhadas != null) {
+                                const diff = Number(r.horas_trabalhadas) - horasEsperadasDia
+                                if (diff > 0) extras += diff; else faltantes += Math.abs(diff)
+                            }
+                        })
+                        extras = Number(extras.toFixed(1)); faltantes = Number(faltantes.toFixed(1))
+                        const saldo = Number((extras - faltantes).toFixed(1))
+                        if (extras === 0 && faltantes === 0) return null
+                        return (
+                            <>
+                                <div className="bg-green-500/10 border border-green-500/30 rounded-xl px-4 py-2 flex items-center gap-2"><span className="text-green-400 text-xs">Horas a mais:</span><span className="text-white font-bold">+{extras.toFixed(1)}h</span></div>
+                                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-4 py-2 flex items-center gap-2"><span className="text-yellow-400 text-xs">Horas a menos:</span><span className="text-white font-bold">-{faltantes.toFixed(1)}h</span></div>
+                                <div className={`rounded-xl px-4 py-2 flex items-center gap-2 border ${saldo >= 0 ? 'bg-green-500/10 border-green-500/30' : 'bg-red-500/10 border-red-500/30'}`}><span className={`text-xs ${saldo >= 0 ? 'text-green-400' : 'text-red-400'}`}>Saldo:</span><span className={`font-bold ${saldo >= 0 ? 'text-green-400' : 'text-red-400'}`}>{saldo >= 0 ? '+' : ''}{saldo.toFixed(1)}h</span></div>
+                            </>
+                        )
+                    })()}
                     {isAdmin && colaboradorSel && <button onClick={() => sincronizarFaltas(colaboradorSel.id, registros, faltas)} className="ml-auto text-xs text-gray-500 hover:text-white cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none transition-colors">🔄 Sincronizar faltas</button>}
                 </div>
                 {loading ? <p className="text-gray-500 text-center py-8">Carregando...</p> : (
@@ -547,13 +720,13 @@ export default function RelatorioMensal({ usuario }) {
                                 const isHoje = dia === hoje.getDate() && mes === hoje.getMonth() && ano === hoje.getFullYear()
                                 let bg = 'bg-gray-800'
                                 if (!passado) { bg = 'bg-gray-800' }
-                                else if (falta?.status === 'abonada') bg = 'bg-blue-500 bg-opacity-15'
-                                else if (falta?.status === 'falta') bg = 'bg-red-500 bg-opacity-30'
+                                else if (falta?.status === 'abonada') bg = 'bg-blue-500/15'
+                                else if (falta?.status === 'falta') bg = 'bg-red-500/30'
                                 else if (ev?.status === 'aprovado') bg = corEvento(ev.tipo).bg
-                                else if (ev?.status === 'pendente') bg = 'bg-yellow-500 bg-opacity-15'
-                                else if (reg?.entrada && reg?.saida) bg = 'bg-green-500 bg-opacity-15'
-                                else if (reg?.entrada && !reg?.saida) bg = 'bg-yellow-500 bg-opacity-15'
-                                else if (util && passado) bg = 'bg-red-500 bg-opacity-10'
+                                else if (ev?.status === 'pendente') bg = 'bg-yellow-500/15'
+                                else if (reg?.entrada && reg?.saida) bg = 'bg-green-500/15'
+                                else if (reg?.entrada && !reg?.saida) bg = 'bg-yellow-500/15'
+                                else if (util && passado) bg = 'bg-red-500/10'
                                 return (
                                     <div key={dia} onClick={() => passado && clicarDia(dia)} className={`relative rounded-xl p-1.5 text-center transition-all ${bg} ${passado ? 'cursor-pointer hover:opacity-80' : ''} ${isHoje ? 'ring-2 ring-green-500 ring-opacity-60' : ''}`}>
                                         <p className="text-xs font-bold text-white">{dia}</p>
@@ -584,7 +757,7 @@ export default function RelatorioMensal({ usuario }) {
 
             {/* Eventos pendentes admin */}
             {isAdmin && eventosParaAprovar.length > 0 && (
-                <div className="bg-gray-900 rounded-2xl p-6 border border-yellow-500 border-opacity-30">
+                <div className="bg-gray-900 rounded-2xl p-6 border border-yellow-500/30">
                     <h3 className="text-yellow-400 font-bold mb-4">⏳ Eventos pendentes de aprovação</h3>
                     <div className="space-y-2">
                         {eventosParaAprovar.map(ev => (
@@ -623,17 +796,31 @@ export default function RelatorioMensal({ usuario }) {
             )}
 
             {/* Registros colaborador */}
-            {!isAdmin && registros.length > 0 && (
+            {registros.length > 0 && (
                 <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
-                    <h3 className="text-white font-bold mb-4">Registros do mês</h3>
-                    <div className="space-y-2">
-                        {registros.map(r => (
-                            <div key={r.id} className="flex items-center justify-between bg-gray-800 rounded-xl px-4 py-3">
-                                <div><p className="text-white text-sm font-semibold">{new Date(r.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' })}</p><p className="text-gray-400 text-xs mt-0.5"><span className="text-green-400">{horaFmt(r.entrada)}</span>{' → '}<span className={r.saida ? 'text-red-400' : 'text-gray-500'}>{horaFmt(r.saida)}</span></p></div>
-                                <div className="text-right">{r.horas_trabalhadas ? <p className="text-white font-bold text-sm">{Number(r.horas_trabalhadas).toFixed(1)}h</p> : <p className="text-gray-500 text-xs">Em aberto</p>}</div>
-                            </div>
-                        ))}
-                    </div>
+                    <button onClick={() => setRegistrosAbertos(a => !a)} className="w-full flex items-center justify-between bg-transparent border-0 shadow-none p-0 cursor-pointer">
+                        <h3 className="text-white font-bold">Registros do mês <span className="text-gray-500 font-normal text-sm">({registros.length})</span></h3>
+                        <span className={`text-gray-400 text-lg transition-transform ${registrosAbertos ? 'rotate-90' : ''}`}>›</span>
+                    </button>
+                    {registrosAbertos && (
+                        <div className="space-y-2 mt-4">
+                            {registros.map(r => {
+                                const colabParaBanco = isAdmin ? colaboradorSel : usuario
+                                const horasEsperadasDia = colabParaBanco ? horasEsperadasPara(colabParaBanco) : 9
+                                const diffDia = r.horas_trabalhadas != null && r.entrada && r.saida ? Number(r.horas_trabalhadas) - horasEsperadasDia : null
+                                const corHoras = diffDia === null ? 'text-white' : diffDia > 0 ? 'text-green-400' : diffDia < 0 ? 'text-red-400' : 'text-white'
+                                return (
+                                    <div key={r.id} className="flex items-center justify-between bg-gray-800 rounded-xl px-4 py-3">
+                                        <div><p className="text-white text-sm font-semibold">{new Date(r.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' })}</p><p className="text-gray-400 text-xs mt-0.5"><span className="text-green-400">{horaFmt(r.entrada)}</span>{' → '}<span className={r.saida ? 'text-red-400' : 'text-gray-500'}>{horaFmt(r.saida)}</span></p></div>
+                                        <div className="flex items-center gap-3">
+                                            <div className="text-right">{r.horas_trabalhadas ? <p className={`font-bold text-sm ${corHoras}`}>{Number(r.horas_trabalhadas).toFixed(1)}h{diffDia !== null && diffDia !== 0 && <span className="text-[10px] ml-1">({diffDia > 0 ? '+' : ''}{diffDia.toFixed(1)})</span>}</p> : <p className="text-gray-500 text-xs">Em aberto</p>}</div>
+                                            {isAdmin && <button onClick={() => setModalExcluirRegistro(r)} className="text-red-400 hover:text-red-300 text-xs font-semibold w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer">🗑️</button>}
+                                        </div>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -647,7 +834,7 @@ export default function RelatorioMensal({ usuario }) {
                                 <div key={ev.id} className={`flex items-center justify-between rounded-xl px-4 py-3 ${cor.bg}`}>
                                     <div><p className={`text-sm font-semibold text-white`}>{new Date(ev.data + 'T12:00:00').toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' })} — {TIPOS_EVENTO.find(t => t.value === ev.tipo)?.label}{ev.descricao && <span className="text-gray-300 font-normal"> — {ev.descricao}</span>}</p></div>
                                     <div className="flex items-center gap-2">
-                                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ev.status === 'aprovado' ? 'bg-green-500 bg-opacity-20 text-green-400' : ev.status === 'recusado' ? 'bg-red-500 bg-opacity-20 text-red-400' : 'bg-yellow-500 bg-opacity-20 text-yellow-400'}`}>{ev.status === 'aprovado' ? '✓' : ev.status === 'recusado' ? '✗' : '⏳'}</span>
+                                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ev.status === 'aprovado' ? 'bg-green-500/20 text-green-400' : ev.status === 'recusado' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>{ev.status === 'aprovado' ? '✓' : ev.status === 'recusado' ? '✗' : '⏳'}</span>
                                         <p className="font-bold text-sm text-white">{brl(ev.valor)}</p>
                                     </div>
                                 </div>
@@ -658,7 +845,8 @@ export default function RelatorioMensal({ usuario }) {
             )}
 
             {/* Resumo financeiro do colaborador */}
-            {!isAdmin && <ResumoColaborador />}
+            {!isAdmin && usuario.pode_ver_horas !== false && <BancoHorasColaborador />}
+            {!isAdmin && usuario.pode_ver_resumo !== false && <ResumoColaborador />}
 
             {/* Fechamento admin */}
             {isAdmin && (
@@ -678,18 +866,18 @@ export default function RelatorioMensal({ usuario }) {
                                 const evsAprov = evsC.filter(e => e.status === 'aprovado')
                                 const evsPend = evsC.filter(e => e.status === 'pendente')
                                 const faltasAtivas = ftsC.filter(f => f.status === 'falta')
-                                const calc = calcularTotal(colab, regsC, lancsC, evsC, ftsC)
                                 const fech = fechamentos.find(f => f.colaborador_id === colab.id)
+                                const calc = calcularTotal(colab, regsC, lancsC, evsC, ftsC, fech?.pagar_hora_extra || false, fech?.descontar_hora_menos || false)
                                 const aprovado = fech?.aprovado || false
                                 const aberto = expandido === colab.id
                                 return (
-                                    <div key={colab.id} className={`rounded-2xl border transition-all ${aprovado ? 'border-green-500 border-opacity-60 bg-gray-800' : 'border-gray-700 bg-gray-800'}`}>
+                                    <div key={colab.id} className={`rounded-2xl border transition-all ${aprovado ? 'border-green-500/60 bg-gray-800' : 'border-gray-700 bg-gray-800'}`}>
                                         <div className="flex items-center gap-3 p-4 cursor-pointer" onClick={() => setExpandido(aberto ? null : colab.id)}>
                                             <div className="flex-1">
                                                 <div className="flex items-center gap-2 flex-wrap">
                                                     <p className="text-white font-bold text-sm">{colab.nome}</p>
                                                     {aprovado && <span className="text-xs font-bold text-white bg-green-500 px-2 py-0.5 rounded-full">✓ Aprovado</span>}
-                                                    {evsPend.length > 0 && <span className="text-xs font-bold text-yellow-400 bg-yellow-500 bg-opacity-20 px-2 py-0.5 rounded-full">⏳ {evsPend.length}</span>}
+                                                    {evsPend.length > 0 && <span className="text-xs font-bold text-yellow-400 bg-yellow-500/20 px-2 py-0.5 rounded-full">⏳ {evsPend.length}</span>}
                                                     {faltasAtivas.length > 0 && <span className="text-xs font-bold text-white bg-red-500 px-2 py-0.5 rounded-full">⚠ {faltasAtivas.length} falta{faltasAtivas.length > 1 ? 's' : ''}</span>}
                                                 </div>
                                                 <p className="text-gray-400 text-xs">{colab.cargo || '—'} · {calc.dias} dias · {calc.horas.toFixed(1)}h</p>
@@ -710,13 +898,13 @@ export default function RelatorioMensal({ usuario }) {
                                                             const reg = regsC.find(r => r.data === dataStr); const ev = evsC.find(e => e.data === dataStr); const ft = ftsC.find(f => f.data === dataStr)
                                                             const util = new Date(ano, mes, dia).getDay() !== 0 && new Date(ano, mes, dia).getDay() !== 6
                                                             let bg = 'bg-gray-700'
-                                                            if (ft?.status === 'abonada') bg = 'bg-blue-500 bg-opacity-30'
-                                                            else if (ft?.status === 'falta') bg = 'bg-red-500 bg-opacity-40'
-                                                            else if (ev?.status === 'aprovado') bg = corEvento(ev.tipo).bg.replace('bg-opacity-20', 'bg-opacity-40')
-                                                            else if (ev?.status === 'pendente') bg = 'bg-yellow-500 bg-opacity-30'
-                                                            else if (reg?.entrada && reg?.saida) bg = 'bg-green-500 bg-opacity-30'
-                                                            else if (reg?.entrada) bg = 'bg-yellow-500 bg-opacity-30'
-                                                            else if (util) bg = 'bg-red-500 bg-opacity-20'
+                                                            if (ft?.status === 'abonada') bg = 'bg-blue-500/30'
+                                                            else if (ft?.status === 'falta') bg = 'bg-red-500/40'
+                                                            else if (ev?.status === 'aprovado') bg = corEvento(ev.tipo).bg.replace('/20', '/40')
+                                                            else if (ev?.status === 'pendente') bg = 'bg-yellow-500/30'
+                                                            else if (reg?.entrada && reg?.saida) bg = 'bg-green-500/30'
+                                                            else if (reg?.entrada) bg = 'bg-yellow-500/30'
+                                                            else if (util) bg = 'bg-red-500/20'
                                                             return <div key={dia} className={`rounded text-[9px] py-0.5 ${bg}`}><span className="text-white">{dia}</span>{ev?.descricao && <div className="text-[7px] text-white truncate px-0.5">{ev.descricao.slice(0, 6)}</div>}</div>
                                                         })}
                                                     </div>
@@ -727,7 +915,7 @@ export default function RelatorioMensal({ usuario }) {
                                                         <p className="text-gray-400 text-xs font-semibold mb-2 uppercase tracking-wide">Faltas</p>
                                                         <div className="space-y-1">
                                                             {ftsC.map(ft => (
-                                                                <div key={ft.id} className={`flex justify-between items-center rounded-lg px-3 py-2 ${ft.status === 'abonada' ? 'bg-blue-500 bg-opacity-10' : 'bg-red-500 bg-opacity-10'}`}>
+                                                                <div key={ft.id} className={`flex justify-between items-center rounded-lg px-3 py-2 ${ft.status === 'abonada' ? 'bg-blue-500/10' : 'bg-red-500/10'}`}>
                                                                     <div><span className="text-xs font-semibold text-white">{new Date(ft.data + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} — {ft.status === 'abonada' ? 'Abonada' : 'Falta'}</span>{ft.justificativa && <p className="text-gray-500 text-[10px]">{ft.justificativa}</p>}</div>
                                                                     {ft.status === 'falta' ? <button onClick={() => { setModalAbono({ falta: ft }); setJustAbono('') }} className="text-blue-400 text-xs font-bold cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none hover:text-blue-300">Abonar</button> : <button onClick={() => desfazerAbono(ft.id)} className="text-gray-500 text-xs cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none hover:text-gray-300">Desfazer</button>}
                                                                 </div>
@@ -753,10 +941,42 @@ export default function RelatorioMensal({ usuario }) {
                                                 )}
 
                                                 <div>
+                                                    <p className="text-gray-400 text-xs font-semibold mb-2 uppercase tracking-wide">Banco de horas</p>
+                                                    <div className="grid grid-cols-3 gap-2 mb-3">
+                                                        <div className="bg-green-500/10 border border-green-500/30 rounded-lg px-3 py-2"><p className="text-green-400 text-[10px]">Horas a mais</p><p className="text-white font-bold text-sm">+{calc.bancoHorasExtras.toFixed(1)}h</p></div>
+                                                        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2"><p className="text-yellow-400 text-[10px]">Horas a menos</p><p className="text-white font-bold text-sm">-{calc.bancoHorasFaltantes.toFixed(1)}h</p></div>
+                                                        <div className={`rounded-lg px-3 py-2 border ${(calc.bancoHorasExtras - calc.bancoHorasFaltantes) >= 0 ? 'bg-green-500/10 border-green-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
+                                                            <p className={`text-[10px] ${(calc.bancoHorasExtras - calc.bancoHorasFaltantes) >= 0 ? 'text-green-400' : 'text-red-400'}`}>Saldo do mês</p>
+                                                            <p className={`font-bold text-sm ${(calc.bancoHorasExtras - calc.bancoHorasFaltantes) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{(calc.bancoHorasExtras - calc.bancoHorasFaltantes) >= 0 ? '+' : ''}{(calc.bancoHorasExtras - calc.bancoHorasFaltantes).toFixed(1)}h</p>
+                                                        </div>
+                                                    </div>
+                                                    {(calc.bancoHorasExtras > 0 || calc.bancoHorasFaltantes > 0) ? (
+                                                        <div className="grid grid-cols-3 gap-2">
+                                                            {calc.bancoHorasExtras > 0 ? (
+                                                                <button type="button" onClick={(e) => { e.stopPropagation(); togglePagarHoraExtra(colab.id, fech?.pagar_hora_extra || false) }}
+                                                                    className={`text-left rounded-xl p-3 cursor-pointer transition-colors border ${fech?.pagar_hora_extra ? 'bg-green-500 border-green-500' : 'bg-gray-800 border-gray-700 hover:border-gray-600'}`}>
+                                                                    <p className={`text-xs font-bold ${fech?.pagar_hora_extra ? 'text-white' : 'text-gray-300'}`}>{fech?.pagar_hora_extra ? '✅ Pagando' : '💰 Pagar?'}</p>
+                                                                    <p className={`text-[10px] mt-0.5 ${fech?.pagar_hora_extra ? 'text-green-100' : 'text-gray-500'}`}>{fech?.pagar_hora_extra ? `+${brl(calc.bancoHorasExtras * (colab.hora_extra_valor || 0))}` : 'Pagar as horas a mais'}</p>
+                                                                </button>
+                                                            ) : <div />}
+                                                            {calc.bancoHorasFaltantes > 0 ? (
+                                                                <button type="button" onClick={(e) => { e.stopPropagation(); toggleDescontarHoraMenos(colab.id, fech?.descontar_hora_menos || false) }}
+                                                                    className={`text-left rounded-xl p-3 cursor-pointer transition-colors border ${fech?.descontar_hora_menos ? 'bg-red-500 border-red-500' : 'bg-gray-800 border-gray-700 hover:border-gray-600'}`}>
+                                                                    <p className={`text-xs font-bold ${fech?.descontar_hora_menos ? 'text-white' : 'text-gray-300'}`}>{fech?.descontar_hora_menos ? '⚠️ Descontando' : '➖ Descontar?'}</p>
+                                                                    <p className={`text-[10px] mt-0.5 ${fech?.descontar_hora_menos ? 'text-red-100' : 'text-gray-500'}`}>{fech?.descontar_hora_menos ? `-${brl(calc.bancoHorasFaltantes * (colab.hora_extra_valor || 0))}` : 'Descontar as horas a menos'}</p>
+                                                                </button>
+                                                            ) : <div />}
+                                                            <div />
+                                                        </div>
+                                                    ) : <p className="text-gray-500 text-xs">Sem diferença de horas registrada este mês.</p>}
+                                                    <p className="text-gray-600 text-[10px] mt-2">O que não for pago/descontado aqui vira saldo do banco de horas e aparece no fechamento do mês seguinte.</p>
+                                                </div>
+
+                                                <div>
                                                     <p className="text-gray-400 text-xs font-semibold mb-2 uppercase tracking-wide">Resumo financeiro</p>
                                                     <div className="space-y-1">
                                                         <LinhaResumo label="Salário fixo" valor={calc.salario} qtd={1} />
-                                                        <LinhaResumo label="Ajuda de custo" valor={calc.ajuda} qtd={1} />
+                                                        <LinhaResumo label="Ajuda de custo" valor={calc.ajuda} qtd={colab.ajuda_custo_tipo === 'por_dia' ? calc.dias : 1} unitario={colab.ajuda_custo_tipo === 'por_dia' ? colab.ajuda_custo_diaria : null} />
                                                         <LinhaResumo label="Cachê" valor={calc.cache} qtd={calc.nCache} unitario={calc.nCache ? calc.cache / calc.nCache : 0} />
                                                         <LinhaResumo label="Meio Cachê" valor={calc.mCache} qtd={calc.nMCache} unitario={calc.nMCache ? calc.mCache / calc.nMCache : 0} />
                                                         <LinhaResumo label="Dia Trabalhado" valor={calc.diaTrab} qtd={calc.nDiaTrab} unitario={calc.nDiaTrab ? calc.diaTrab / calc.nDiaTrab : 0} />
@@ -765,8 +985,11 @@ export default function RelatorioMensal({ usuario }) {
                                                         <LinhaResumo label="Décimo Terceiro" valor={calc.dec} qtd={1} />
                                                         <LinhaResumo label="Bônus" valor={calc.bonus} qtd={1} />
                                                         <LinhaResumo label="Ajuda Moradia" valor={calc.moradia} qtd={1} />
-                                                        <LinhaResumo label={`Horas extra — ${calc.horas > calc.dias * 9 ? (calc.horas - calc.dias * 9).toFixed(1) : 0}h × ${brl(calc.diasUteisMes > 0 ? calc.salario / calc.diasUteisMes / 9 : 0)}/h`} valor={calc.hExtra} qtd={1} />
+                                                        <LinhaResumo label={`Horas extra — ${calc.bancoHorasExtras.toFixed(1)}h × ${brl(colab.hora_extra_valor || 0)}/h`} valor={calc.hExtra} qtd={1} />
                                                         {calc.descontoFalta > 0 && <div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Faltas — {calc.faltasNaoAbonadas}x <span className="text-gray-600">({brl(calc.diasUteisMes > 0 ? calc.salario / calc.diasUteisMes : 0)}/dia)</span></span><span className="font-semibold text-xs text-red-400">-{brl(calc.descontoFalta)}</span></div>}
+                                                        {calc.ajudaExtra > 0 && <div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Ajuda de custo extra (home office) — {calc.nAjudaExtra}x</span><span className="font-semibold text-xs text-teal-400">{brl(calc.ajudaExtra)}</span></div>}
+                                                        {calc.descontoAjudaFalta > 0 && <div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Ajuda de custo descontada (faltas)</span><span className="font-semibold text-xs text-red-400">-{brl(calc.descontoAjudaFalta)}</span></div>}
+                                                        {calc.descontoHorasMenos > 0 && <div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Horas a menos — {calc.bancoHorasFaltantes.toFixed(1)}h × {brl(colab.hora_extra_valor || 0)}/h</span><span className="font-semibold text-xs text-red-400">-{brl(calc.descontoHorasMenos)}</span></div>}
                                                         {calc.adiant > 0 && <div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Adiantamentos</span><span className="font-semibold text-xs text-red-400">-{brl(calc.adiant)}</span></div>}
                                                         {calc.desc > 0 && <div className="flex justify-between bg-gray-900 rounded-lg px-3 py-2"><span className="text-gray-400 text-xs">Descontos</span><span className="font-semibold text-xs text-red-400">-{brl(calc.desc)}</span></div>}
                                                     </div>
@@ -774,7 +997,7 @@ export default function RelatorioMensal({ usuario }) {
 
                                                 <div className="border-t border-gray-700 mt-2 pt-2 space-y-1">
                                                     <div className="flex justify-between px-3 py-1"><span className="text-gray-400 text-xs font-semibold">Total bruto</span><span className="text-green-400 text-sm font-bold">{brl(calc.salario + calc.ajuda + calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia + calc.hExtra)}</span></div>
-                                                    <div className="flex justify-between px-3 py-1"><span className="text-gray-400 text-xs font-semibold">Total descontos</span><span className="text-red-400 text-sm font-bold">-{brl(calc.descontoFalta + calc.adiant + calc.desc)}</span></div>
+                                                    <div className="flex justify-between px-3 py-1"><span className="text-gray-400 text-xs font-semibold">Total descontos</span><span className="text-red-400 text-sm font-bold">-{brl(calc.descontoFalta + calc.descontoHorasMenos + calc.adiant + calc.desc)}</span></div>
                                                     <div className="flex justify-between bg-gray-700 rounded-lg px-3 py-2"><span className="text-white text-sm font-bold">Total líquido</span><span className="text-white text-sm font-bold">{brl(calc.total)}</span></div>
                                                 </div>
 
@@ -798,7 +1021,7 @@ export default function RelatorioMensal({ usuario }) {
 
                                                 <div className="flex items-center justify-between pt-2 border-t border-gray-700">
                                                     <div><p className="text-gray-400 text-xs">Total líquido</p><p className="text-white font-bold text-lg">{brl(calc.total)}</p></div>
-                                                    {aprovado ? <button onClick={() => desaprovarColaborador(colab.id)} disabled={aprovando === colab.id} className="bg-gray-700 text-gray-300 font-bold py-2 px-4 rounded-xl cursor-pointer hover:bg-gray-600 transition-colors text-sm w-auto disabled:opacity-50">Desfazer</button> : <button onClick={() => aprovarColaborador(colab.id, calc.total)} disabled={aprovando === colab.id} className="bg-green-500 text-white font-bold py-2 px-5 rounded-xl cursor-pointer hover:bg-green-600 transition-colors text-sm w-auto disabled:opacity-50">{aprovando === colab.id ? 'Aprovando...' : '✓ Aprovar'}</button>}
+                                                    {aprovado ? <button onClick={() => desaprovarColaborador(colab.id)} disabled={aprovando === colab.id} className="bg-gray-700 text-gray-300 font-bold py-2 px-4 rounded-xl cursor-pointer hover:bg-gray-600 transition-colors text-sm w-auto disabled:opacity-50">Desfazer</button> : <button onClick={() => aprovarColaborador(colab.id, calc.total, calc)} disabled={aprovando === colab.id} className="bg-green-500 text-white font-bold py-2 px-5 rounded-xl cursor-pointer hover:bg-green-600 transition-colors text-sm w-auto disabled:opacity-50">{aprovando === colab.id ? 'Aprovando...' : '✓ Aprovar'}</button>}
                                                 </div>
                                             </div>
                                         )}
@@ -812,7 +1035,7 @@ export default function RelatorioMensal({ usuario }) {
 
             {/* Modal falta */}
             {modalAbono && (
-                <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
                     <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
                         <div className="flex items-center justify-between mb-4">
                             <div><h3 className="text-white text-lg font-bold">Resolver falta</h3><p className="text-gray-400 text-sm">{new Date(modalAbono.falta.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p></div>
@@ -867,14 +1090,14 @@ export default function RelatorioMensal({ usuario }) {
 
             {/* Modal evento */}
             {modalEvento && (
-                <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
                     <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
                         <div className="flex items-center justify-between mb-4">
                             <div><h3 className="text-white text-lg font-bold">{modalEvento.eventoExistente ? 'Editar evento' : 'Lançar evento'}</h3><p className="text-gray-400 text-sm">{new Date(modalEvento.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p></div>
                             <button onClick={() => setModalEvento(null)} className="text-gray-400 hover:text-white cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none text-2xl">✕</button>
                         </div>
                         {!isAdmin && modalEvento.eventoExistente?.status === 'aprovado' ? (
-                            <div className="bg-green-500 bg-opacity-10 border border-green-500 border-opacity-30 rounded-xl p-4">
+                            <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-4">
                                 <p className="text-green-400 text-sm font-semibold">✓ Evento aprovado pelo admin.</p>
                                 <p className="text-gray-400 text-xs mt-1">{TIPOS_EVENTO.find(t => t.value === modalEvento.eventoExistente.tipo)?.label} — {brl(modalEvento.eventoExistente.valor)}</p>
                                 {modalEvento.eventoExistente.descricao && <p className="text-gray-400 text-xs">{modalEvento.eventoExistente.descricao}</p>}
@@ -923,7 +1146,7 @@ export default function RelatorioMensal({ usuario }) {
                             </div>
                         )}
                         <div className="flex gap-3 mt-5">
-                            {modalEvento.eventoExistente && <button onClick={() => { excluirEvento(modalEvento.eventoExistente.id); setModalEvento(null) }} className="bg-red-500 bg-opacity-20 text-red-400 font-bold py-3 px-4 rounded-2xl cursor-pointer hover:bg-opacity-30 transition-colors border-0 shadow-none w-auto">Excluir</button>}
+                            {modalEvento.eventoExistente && <button onClick={() => { excluirEvento(modalEvento.eventoExistente.id); setModalEvento(null) }} className="bg-red-500/20 text-red-400 font-bold py-3 px-4 rounded-2xl cursor-pointer hover:bg-red-500/30 transition-colors border-0 shadow-none w-auto">Excluir</button>}
                             <button onClick={() => setModalEvento(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">{(!isAdmin && modalEvento.eventoExistente?.status === 'aprovado') ? 'Fechar' : 'Cancelar'}</button>
                             {(!modalEvento.eventoExistente || modalEvento.eventoExistente?.status !== 'aprovado' || isAdmin) && <button onClick={salvarEvento} disabled={salvandoEvento || (isAdmin && !formEvento.valor) || (!isAdmin && formEvento.tipo !== 'dia_normal' && !formEvento.valor) || (!isAdmin && formEvento.tipo === 'dia_normal' && !formEvento.entrada && !formEvento.saida)} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{salvandoEvento ? 'Salvando...' : isAdmin ? 'Salvar' : 'Solicitar'}</button>}
                         </div>
@@ -933,7 +1156,7 @@ export default function RelatorioMensal({ usuario }) {
 
             {/* Modal lançamento */}
             {modalLanc && (
-                <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
                     <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-md border border-gray-700">
                         <div className="flex items-center justify-between mb-5">
                             <h3 className="text-white text-lg font-bold">{tipoModalLanc === 'credito' ? 'Novo crédito' : 'Novo débito'}</h3>
@@ -961,7 +1184,7 @@ export default function RelatorioMensal({ usuario }) {
 
             {/* Modal export */}
             {modalExport && (
-                <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
                     <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-md border border-gray-700">
                         <div className="flex items-center justify-between mb-5"><h3 className="text-white text-lg font-bold">Exportar Relatório</h3><button onClick={() => setModalExport(false)} className="text-gray-400 hover:text-white cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none text-2xl">✕</button></div>
                         <div className="space-y-4">
@@ -975,7 +1198,7 @@ export default function RelatorioMensal({ usuario }) {
 
             {/* Modal correção ponto colaborador */}
             {modalDia && (
-                <div className="fixed inset-0 bg-black bg-opacity-70 flex items-end justify-center z-50 p-4">
+                <div className="fixed inset-0 bg-black/70 flex items-end justify-center z-50 p-4">
                     <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
                         {sucessoSol ? (
                             <div className="text-center py-4"><div className="text-5xl mb-4">✅</div><h3 className="text-white text-xl font-bold mb-2">Solicitação enviada!</h3><p className="text-gray-400 text-sm mb-6">O admin será notificado.</p><button onClick={() => setModalDia(null)} className="w-full bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 transition-colors">Fechar</button></div>
@@ -983,7 +1206,7 @@ export default function RelatorioMensal({ usuario }) {
                             <>
                                 <h3 className="text-white text-lg font-bold mb-1">Solicitar correção de ponto</h3>
                                 <p className="text-gray-400 text-sm mb-5">{new Date(modalDia.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
-                                {getSolicitacao(modalDia.dia) ? <div className="bg-yellow-500 bg-opacity-10 border border-yellow-500 border-opacity-30 rounded-xl p-4 mb-4"><p className="text-yellow-400 text-sm font-semibold">Você já tem uma solicitação para este dia.</p></div> : (
+                                {getSolicitacao(modalDia.dia) ? <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 mb-4"><p className="text-yellow-400 text-sm font-semibold">Você já tem uma solicitação para este dia.</p></div> : (
                                     <div className="space-y-4">
                                         <div className="grid grid-cols-2 gap-3">
                                             <div><label className="text-gray-400 text-xs mb-1 block">Entrada</label><input type="time" value={formSol.entrada} onChange={e => setFormSol(f => ({ ...f, entrada: e.target.value }))} className={inputCls} /></div>
@@ -997,6 +1220,56 @@ export default function RelatorioMensal({ usuario }) {
                                     {!getSolicitacao(modalDia.dia) && <button onClick={enviarSolicitacao} disabled={enviandoSol || !formSol.justificativa.trim()} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{enviandoSol ? 'Enviando...' : 'Enviar'}</button>}
                                 </div>
                             </>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Modal excluir registro de ponto */}
+            {modalExcluirRegistro && (
+                <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+                    <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
+                        <h3 className="text-white text-lg font-bold mb-2">Excluir registro de ponto</h3>
+                        <p className="text-gray-400 text-sm mb-1">{new Date(modalExcluirRegistro.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+                        <p className="text-gray-400 text-sm mb-5"><span className="text-green-400">{horaFmt(modalExcluirRegistro.entrada)}</span> → <span className="text-red-400">{horaFmt(modalExcluirRegistro.saida)}</span></p>
+                        <p className="text-yellow-400 text-xs mb-5">⚠️ Isso apaga o registro por completo (não vira falta automaticamente — sincronize as faltas depois se for o caso).</p>
+                        <div className="flex gap-3">
+                            <button onClick={() => setModalExcluirRegistro(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button>
+                            <button onClick={excluirRegistroPonto} disabled={excluindoRegistro} className="flex-1 bg-red-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-red-600 disabled:opacity-50 transition-colors">{excluindoRegistro ? 'Excluindo...' : 'Excluir'}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal histórico de fechamentos do colaborador */}
+            {modalHistorico && (
+                <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+                    <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-lg border border-gray-700 max-h-[85vh] overflow-y-auto">
+                        <div className="flex items-center justify-between mb-1">
+                            <h3 className="text-white text-lg font-bold">Histórico de fechamentos</h3>
+                            <button onClick={() => setModalHistorico(false)} className="text-gray-400 hover:text-white w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer text-2xl">✕</button>
+                        </div>
+                        <p className="text-gray-400 text-sm mb-5">{colaboradorSel?.nome}</p>
+                        {carregandoHistorico ? (
+                            <p className="text-gray-500 text-center py-8">Carregando...</p>
+                        ) : historicoFechamentos.length === 0 ? (
+                            <p className="text-gray-500 text-center py-8">Nenhum fechamento anterior encontrado. Fechamentos aparecem aqui depois que você aprova o mês (mesmo que ainda não tenha aprovado o atual).</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {historicoFechamentos.map(f => (
+                                    <button key={f.id} onClick={() => { setMes(f.mes - 1); setAno(f.ano); setModalHistorico(false) }}
+                                        className={`w-full text-left flex items-center justify-between rounded-xl px-4 py-3 cursor-pointer transition-colors border ${f.mes - 1 === mes && f.ano === ano ? 'bg-gray-700 border-green-500/50' : 'bg-gray-800 border-transparent hover:border-gray-600'}`}>
+                                        <div>
+                                            <p className="text-white text-sm font-semibold capitalize">{new Date(f.ano, f.mes - 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</p>
+                                            <div className="flex items-center gap-2 mt-0.5">
+                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${f.aprovado ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'}`}>{f.aprovado ? '✓ Aprovado' : '⏳ Não aprovado'}</span>
+                                                {f.saldo_banco_horas != null && f.saldo_banco_horas !== 0 && <span className={`text-[10px] ${f.saldo_banco_horas > 0 ? 'text-green-400' : 'text-red-400'}`}>Saldo banco: {f.saldo_banco_horas > 0 ? '+' : ''}{Number(f.saldo_banco_horas).toFixed(1)}h</span>}
+                                            </div>
+                                        </div>
+                                        <p className="text-white font-bold">{brl(f.total_liquido)}</p>
+                                    </button>
+                                ))}
+                            </div>
                         )}
                     </div>
                 </div>

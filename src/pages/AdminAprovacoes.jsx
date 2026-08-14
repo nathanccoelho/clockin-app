@@ -13,12 +13,11 @@ function desmascaraMoeda(valor) {
   return Number(String(valor).replace(/\D/g, '')) / 100
 }
 
-const ESCALAS = [
-  { value: '5x2', label: '5x2 — Seg a Sex' },
-  { value: '6x1_sabados', label: '6x1 — Seg a Sex + 2 sábados fixos/mês' },
-  { value: '5x2_sabados_variaveis', label: '5x2 + sábados variáveis' },
-  { value: 'livre', label: 'Livre — Escala variável' },
-]
+const DIAS_SEMANA_LABEL = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+function resumoDias(dias) {
+  if (!dias?.length) return ''
+  return [...dias].sort().map(d => DIAS_SEMANA_LABEL[d]).join(', ')
+}
 
 export default function AdminAprovacoes({ usuario }) {
   const [pendentes, setPendentes] = useState([])
@@ -26,17 +25,21 @@ export default function AdminAprovacoes({ usuario }) {
   const [processando, setProcessando] = useState(null)
   const [modalAprovar, setModalAprovar] = useState(null)
   const [cargos, setCargos] = useState([])
+  const [escalas, setEscalas] = useState([])
   const [formAprovar, setFormAprovar] = useState({
     data_admissao: new Date().toISOString().split('T')[0],
     cargo: '',
-    escala: '5x2',
+    escala_id: '',
     salario_fixo: '',
     ajuda_custo: '',
+    ajuda_custo_tipo: 'fixo',
     hora_extra_valor: '',
     cache_evento: '',
+    pode_ver_horas: true,
+    pode_ver_resumo: true,
   })
 
-  useEffect(() => { carregar(); carregarCargos() }, [])
+  useEffect(() => { carregar(); carregarCargos(); carregarEscalas() }, [])
 
   async function carregar() {
     setLoading(true)
@@ -52,27 +55,38 @@ export default function AdminAprovacoes({ usuario }) {
     setCargos(data || [])
   }
 
+  async function carregarEscalas() {
+    const { data } = await supabase
+      .from('escalas').select('*').eq('empresa_id', usuario.empresa_id).order('nome')
+    setEscalas(data || [])
+  }
+
   function calcularHoraExtra(salarioStr) {
     const sal = desmascaraMoeda(salarioStr)
     if (!sal) return ''
-    const diasMes = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()
-    return mascaraMoeda(String(Math.round((sal / diasMes / 9) * 100)))
+    return mascaraMoeda(String(Math.round((sal / 30 / 9 * 1.5) * 100)))
   }
 
   async function confirmarAprovacao() {
     if (!modalAprovar) return
     setProcessando(modalAprovar.id)
 
+    const escalaEscolhida = escalas.find(e => e.id === formAprovar.escala_id)
+
     const { error } = await supabase.from('colaboradores').update({
       status: 'aprovado',
       empresa_id: usuario.empresa_id,
       data_admissao: formAprovar.data_admissao || null,
       cargo: formAprovar.cargo,
-      escala: formAprovar.escala,
+      escala_id: formAprovar.escala_id || null,
+      escala: escalaEscolhida?.nome || null,
       salario_fixo: desmascaraMoeda(formAprovar.salario_fixo),
       ajuda_custo_diaria: desmascaraMoeda(formAprovar.ajuda_custo),
+      ajuda_custo_tipo: formAprovar.ajuda_custo_tipo,
       hora_extra_valor: desmascaraMoeda(formAprovar.hora_extra_valor),
       cache_evento: desmascaraMoeda(formAprovar.cache_evento),
+      pode_ver_horas: formAprovar.pode_ver_horas,
+      pode_ver_resumo: formAprovar.pode_ver_resumo,
       aprovado_por: usuario.nome,
       aprovado_em: new Date().toISOString()
     }).eq('id', modalAprovar.id)
@@ -81,8 +95,9 @@ export default function AdminAprovacoes({ usuario }) {
       setModalAprovar(null)
       setFormAprovar({
         data_admissao: new Date().toISOString().split('T')[0],
-        cargo: '', escala: '5x2', salario_fixo: '',
-        ajuda_custo: '', hora_extra_valor: '', cache_evento: '',
+        cargo: '', escala_id: '', salario_fixo: '',
+        ajuda_custo: '', ajuda_custo_tipo: 'fixo', hora_extra_valor: '', cache_evento: '',
+        pode_ver_horas: true, pode_ver_resumo: true,
       })
       carregar()
     }
@@ -146,7 +161,7 @@ export default function AdminAprovacoes({ usuario }) {
 
       {/* Modal Aprovação */}
       {modalAprovar && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
             <h3 className="text-white text-xl font-bold mb-1">Aprovar Colaborador</h3>
             <p className="text-gray-400 mb-6">{modalAprovar.nome}</p>
@@ -172,25 +187,46 @@ export default function AdminAprovacoes({ usuario }) {
 
               <div className="md:col-span-2">
                 <label className="block text-gray-400 text-sm mb-1">Escala de Trabalho</label>
-                <select className={inputCls + ' cursor-pointer'}
-                  value={formAprovar.escala}
-                  onChange={e => setFormAprovar({...formAprovar, escala: e.target.value})}>
-                  {ESCALAS.map(e => <option key={e.value} value={e.value}>{e.label}</option>)}
-                </select>
+                {escalas.length === 0 ? (
+                  <p className="text-yellow-400 text-sm bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3">
+                    ⚠️ Nenhuma escala cadastrada ainda. Vá na aba <span className="font-semibold">Escalas</span> e crie a escala desse colaborador antes de aprovar (ex: dias da semana que ele trabalha).
+                  </p>
+                ) : (
+                  <>
+                    <select className={inputCls + ' cursor-pointer'}
+                      value={formAprovar.escala_id}
+                      onChange={e => setFormAprovar({...formAprovar, escala_id: e.target.value})}>
+                      <option value="">-- Selecione --</option>
+                      {escalas.map(e => <option key={e.id} value={e.id}>{e.nome} — {resumoDias(e.dias_semana)}</option>)}
+                    </select>
+                    <p className="text-gray-600 text-xs mt-1">Não achou a escala certa? Crie uma nova na aba Escalas.</p>
+                  </>
+                )}
               </div>
 
-              <div>
+              <div className="md:col-span-2">
                 <label className="block text-gray-400 text-sm mb-1">Salário Fixo</label>
                 <input type="text" placeholder="R$ 0,00" className={inputCls + ' cursor-text'}
                   value={formAprovar.salario_fixo}
                   onChange={e => setFormAprovar({...formAprovar, salario_fixo: mascaraMoeda(e.target.value)})} />
               </div>
 
-              <div>
-                <label className="block text-gray-400 text-sm mb-1">Ajuda de Custo Mensal</label>
+              <div className="md:col-span-2">
+                <label className="block text-gray-400 text-sm mb-1">Ajuda de Custo</label>
+                <div className="flex gap-2 mb-2">
+                  <button type="button" onClick={() => setFormAprovar({...formAprovar, ajuda_custo_tipo: 'fixo'})}
+                    className={`flex-1 text-xs font-semibold py-2 rounded-lg cursor-pointer transition-colors border w-auto ${formAprovar.ajuda_custo_tipo === 'fixo' ? 'bg-green-500 text-white border-green-500' : 'bg-gray-800 text-gray-400 border-gray-700'}`}>
+                    Valor fixo/mês
+                  </button>
+                  <button type="button" onClick={() => setFormAprovar({...formAprovar, ajuda_custo_tipo: 'por_dia'})}
+                    className={`flex-1 text-xs font-semibold py-2 rounded-lg cursor-pointer transition-colors border w-auto ${formAprovar.ajuda_custo_tipo === 'por_dia' ? 'bg-green-500 text-white border-green-500' : 'bg-gray-800 text-gray-400 border-gray-700'}`}>
+                    Por dia presencial
+                  </button>
+                </div>
                 <input type="text" placeholder="R$ 0,00" className={inputCls + ' cursor-text'}
                   value={formAprovar.ajuda_custo}
                   onChange={e => setFormAprovar({...formAprovar, ajuda_custo: mascaraMoeda(e.target.value)})} />
+                <p className="text-gray-600 text-xs mt-1">{formAprovar.ajuda_custo_tipo === 'por_dia' ? 'Valor pago só nos dias em que bater o ponto' : 'Valor pago todo mês, independente de faltas'}</p>
               </div>
 
               <div>
@@ -205,7 +241,7 @@ export default function AdminAprovacoes({ usuario }) {
                 <input type="text" placeholder="R$ 0,00" className={inputCls + ' cursor-text'}
                   value={formAprovar.hora_extra_valor}
                   onChange={e => setFormAprovar({...formAprovar, hora_extra_valor: mascaraMoeda(e.target.value)})} />
-                <p className="text-gray-600 text-xs mt-1">Salário ÷ dias do mês ÷ 9h</p>
+                <p className="text-gray-600 text-xs mt-1">Salário ÷ 30 ÷ 9h + 50%</p>
               </div>
 
               <div>
@@ -216,10 +252,24 @@ export default function AdminAprovacoes({ usuario }) {
                 <p className="text-gray-600 text-xs mt-1">Valor fixo por evento (sáb/dom)</p>
               </div>
 
+              <div className="md:col-span-2 border-t border-gray-800 pt-4">
+                <p className="text-gray-400 text-sm font-semibold mb-3">O que esse colaborador pode ver no Relatório Mensal dele</p>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" checked={formAprovar.pode_ver_horas} onChange={e => setFormAprovar({...formAprovar, pode_ver_horas: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+                    <span className="text-gray-300 text-sm">Total de horas trabalhadas</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" checked={formAprovar.pode_ver_resumo} onChange={e => setFormAprovar({...formAprovar, pode_ver_resumo: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+                    <span className="text-gray-300 text-sm">Resumo financeiro do mês (salário, descontos, total)</span>
+                  </label>
+                </div>
+              </div>
+
             </div>
 
             <div className="flex gap-3 mt-6">
-              <button onClick={confirmarAprovacao} disabled={processando === modalAprovar.id}
+              <button onClick={confirmarAprovacao} disabled={processando === modalAprovar.id || !formAprovar.escala_id}
                 className="flex-1 bg-green-500 text-white font-bold py-3 rounded-xl hover:bg-green-600 disabled:opacity-50 cursor-pointer transition-colors">
                 {processando === modalAprovar.id ? 'Aprovando...' : 'Confirmar'}
               </button>

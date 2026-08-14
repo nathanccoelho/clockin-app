@@ -19,6 +19,7 @@ export default function AdminEscalas({ usuario }) {
   const [modal, setModal] = useState(null) // null | 'novo' | {id, ...}
   const [form, setForm] = useState(ESCALA_VAZIA)
   const [salvando, setSalvando] = useState(false)
+  const [erro, setErro] = useState('')
   const [modalExcluir, setModalExcluir] = useState(null)
 
   useEffect(() => { carregar() }, [])
@@ -30,8 +31,8 @@ export default function AdminEscalas({ usuario }) {
     setLoading(false)
   }
 
-  function abrirNovo() { setForm(ESCALA_VAZIA); setModal('novo') }
-  function abrirEditar(e) { setForm({ nome: e.nome, dias_semana: e.dias_semana || [], horario_entrada: e.horario_entrada || '09:00', horario_saida: e.horario_saida || '18:00' }); setModal(e) }
+  function abrirNovo() { setForm(ESCALA_VAZIA); setErro(''); setModal('novo') }
+  function abrirEditar(e) { setForm({ nome: e.nome, dias_semana: e.dias_semana || [], horario_entrada: e.horario_entrada || '09:00', horario_saida: e.horario_saida || '18:00' }); setErro(''); setModal(e) }
 
   function toggleDia(dia) {
     setForm(f => ({
@@ -42,10 +43,12 @@ export default function AdminEscalas({ usuario }) {
 
   async function salvar() {
     if (!form.nome.trim() || form.dias_semana.length === 0) return
-    setSalvando(true)
+    setSalvando(true); setErro('')
     const payload = { nome: form.nome.trim().toUpperCase(), dias_semana: form.dias_semana, horario_entrada: form.horario_entrada || null, horario_saida: form.horario_saida || null, empresa_id: usuario.empresa_id }
-    if (modal === 'novo') await supabase.from('escalas').insert(payload)
-    else await supabase.from('escalas').update(payload).eq('id', modal.id)
+    const { error } = modal === 'novo'
+      ? await supabase.from('escalas').insert(payload)
+      : await supabase.from('escalas').update(payload).eq('id', modal.id)
+    if (error) { setErro('Erro ao salvar: ' + error.message); setSalvando(false); return }
     setSalvando(false); setModal(null); carregar()
   }
 
@@ -89,7 +92,7 @@ export default function AdminEscalas({ usuario }) {
 
       {/* Modal criar/editar */}
       {modal !== null && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
           <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-white text-lg font-bold">{modal === 'novo' ? 'Nova escala' : 'Editar escala'}</h3>
@@ -122,6 +125,7 @@ export default function AdminEscalas({ usuario }) {
                 </div>
               </div>
             </div>
+            {erro && <p className="text-red-400 text-sm mt-3">{erro}</p>}
             <div className="flex gap-3 mt-5">
               <button onClick={() => setModal(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button>
               <button onClick={salvar} disabled={salvando || !form.nome.trim() || form.dias_semana.length === 0} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{salvando ? 'Salvando...' : 'Salvar'}</button>
@@ -132,7 +136,7 @@ export default function AdminEscalas({ usuario }) {
 
       {/* Modal excluir */}
       {modalExcluir && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
           <div className="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-sm p-6">
             <h3 className="text-white text-lg font-bold mb-2">Excluir Escala</h3>
             <p className="text-gray-400 mb-6">Tem certeza que deseja excluir <strong className="text-white">{modalExcluir.nome}</strong>?</p>

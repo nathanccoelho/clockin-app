@@ -28,7 +28,7 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
     const [cargos, setCargos] = useState([])
     const [loading, setLoading] = useState(true)
     const [modalCadastro, setModalCadastro] = useState(false)
-    const [form, setForm] = useState({ nome: '', cpf: '', email: '', telefone: '', cargo: '', escala: '5x2', salario_fixo: '', ajuda_custo: '', hora_extra_valor: '', cache_evento: '' })
+    const [form, setForm] = useState({ nome: '', cpf: '', email: '', telefone: '', cargo: '', escala: '5x2', salario_fixo: '', ajuda_custo: '', ajuda_custo_tipo: 'fixo', hora_extra_valor: '', cache_evento: '' })
     const [salvando, setSalvando] = useState(false)
     const [msg, setMsg] = useState('')
     const [modalFacial, setModalFacial] = useState(null)
@@ -39,8 +39,13 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
     const [faceDescriptor, setFaceDescriptor] = useState(null)
     const [facePreview, setFacePreview] = useState(null)
     const [salvandoFacial, setSalvandoFacial] = useState(false)
-    const [modalAcao, setModalAcao] = useState(null) // { colab, tipo: 'excluir'|'promover'|'reativar' }
+    const [poseAtual, setPoseAtual] = useState('centro') // centro | direita | esquerda | concluido
+    const poseAtualRef = useRef('centro')
+    const fotoFrontalRef = useRef(null)
+    const [modalAcao, setModalAcao] = useState(null) // { colab, tipo: 'excluir'|'promover'|'reativar'|'deletar' }
     const [processandoAcao, setProcessandoAcao] = useState(false)
+    const [acaoErro, setAcaoErro] = useState('')
+    const [confirmacaoTexto, setConfirmacaoTexto] = useState('')
     const videoRef = useRef(null), streamRef = useRef(null), loopRef = useRef(false), capturedRef = useRef(false)
 
     useEffect(() => { carregar(); carregarCargos() }, [modo])
@@ -58,11 +63,10 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
 
     function calcularHoraExtra(salarioStr) {
         const sal = desmascaraMoeda(salarioStr); if (!sal) return ''
-        const diasMes = new Date(new Date().getFullYear(), new Date().getMonth()+1, 0).getDate()
-        return mascaraMoeda(String(Math.round((sal/diasMes/9)*100)))
+        return mascaraMoeda(String(Math.round((sal/30/9*1.5)*100)))
     }
 
-    function abrirModalCadastro() { setForm({ nome: '', cpf: '', email: '', telefone: '', cargo: '', escala: '5x2', salario_fixo: '', ajuda_custo: '', hora_extra_valor: '', cache_evento: '' }); setMsg(''); setModalCadastro(true) }
+    function abrirModalCadastro() { setForm({ nome: '', cpf: '', email: '', telefone: '', cargo: '', escala: '5x2', salario_fixo: '', ajuda_custo: '', ajuda_custo_tipo: 'fixo', hora_extra_valor: '', cache_evento: '' }); setMsg(''); setModalCadastro(true) }
 
     async function salvar(e) {
         e.preventDefault(); setSalvando(true); setMsg('')
@@ -73,7 +77,7 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
         const { error } = await supabase.from('colaboradores').insert({
             nome: form.nome.trim(), cpf: cpfLimpo, email: form.email.trim() || null, telefone: form.telefone.trim() || null,
             cargo: form.cargo, escala: form.escala, salario_fixo: desmascaraMoeda(form.salario_fixo),
-            ajuda_custo_diaria: desmascaraMoeda(form.ajuda_custo), hora_extra_valor: desmascaraMoeda(form.hora_extra_valor),
+            ajuda_custo_diaria: desmascaraMoeda(form.ajuda_custo), ajuda_custo_tipo: form.ajuda_custo_tipo, hora_extra_valor: desmascaraMoeda(form.hora_extra_valor),
             cache_evento: desmascaraMoeda(form.cache_evento), empresa_id: usuario.empresa_id, status: 'aprovado', perfil: 'colaborador', ativo: true
         })
         if (error) setMsg('Erro: ' + error.message)
@@ -83,7 +87,7 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
 
     async function executarAcao() {
         if (!modalAcao) return
-        setProcessandoAcao(true)
+        setProcessandoAcao(true); setAcaoErro('')
         const { colab, tipo } = modalAcao
         if (tipo === 'excluir') {
             // Inativa sem apagar histórico
@@ -94,19 +98,29 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
             await supabase.from('colaboradores').update({ perfil: 'colaborador' }).eq('id', colab.id)
         } else if (tipo === 'reativar') {
             await supabase.from('colaboradores').update({ status: 'aprovado', ativo: true, inativado_em: null, inativado_por: null }).eq('id', colab.id)
+        } else if (tipo === 'deletar') {
+            // Exclusão permanente — apaga o cadastro do colaborador do banco.
+            const { error } = await supabase.from('colaboradores').delete().eq('id', colab.id)
+            if (error) {
+                // Sem ON DELETE CASCADE configurado no banco ainda — rode o script SQL de cascade no Supabase.
+                setAcaoErro('Não foi possível excluir: há registros vinculados a este colaborador e o banco ainda não está configurado para excluir em cascata. Rode o script SQL de configuração de cascade no Supabase (SQL Editor) e tente novamente.')
+                setProcessandoAcao(false)
+                return
+            }
         }
-        setModalAcao(null); setProcessandoAcao(false); carregar()
+        setModalAcao(null); setProcessandoAcao(false); setConfirmacaoTexto(''); carregar()
     }
 
     // FACIAL
     async function abrirModalFacial(colab) {
         setModalFacial(colab); setFaceStatus('idle'); setFaceDescriptor(null); setFacePreview(null)
+        setPoseAtual('centro'); poseAtualRef.current = 'centro'
         setFaceMsg('Carregando câmera...'); setFaceMsgCor('#aaa'); setOvalCor('#ffffff40'); capturedRef.current = false
         setTimeout(async () => {
             try {
                 const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models'
                 if (!faceapi.nets.tinyFaceDetector.isLoaded) { await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL); await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL); await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL) }
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 480 }, height: { ideal: 640 } }, audio: false })
                 streamRef.current = stream; await new Promise(r => setTimeout(r, 200))
                 if (videoRef.current) { videoRef.current.srcObject = stream; await new Promise(r => { videoRef.current.onloadedmetadata = r }) }
                 setFaceMsg('Posicione o rosto no oval'); setFaceMsgCor('white'); loopRef.current = true; loopFacial()
@@ -126,23 +140,53 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
         const todos = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 }))
         if (todos.length > 1) { setOvalCor('#ef4444'); setFaceMsg('⚠️ Mais de um rosto — fique sozinho'); setFaceMsgCor('#ef4444'); return }
         const { box } = det.detection, vw = video.videoWidth, vh = video.videoHeight, cx = box.x+box.width/2, cy = box.y+box.height/2
-        if (box.width < vw*FC.minFaceWidthCadastro) { setOvalCor('#facc15'); setFaceMsg('Aproxime mais'); setFaceMsgCor('#facc15'); return }
-        if (cx < vw*FC.minCX || cx > vw*FC.maxCX || cy < vh*FC.minCY || cy > vh*FC.maxCY) { setOvalCor('#facc15'); setFaceMsg('Centralize o rosto'); setFaceMsgCor('#facc15'); return }
+        const pose = poseAtualRef.current
+        const larguraMinima = pose === 'centro' ? FC.minFaceWidthCadastro : FC.minFaceWidthCadastroLateral
+        if (box.width < vw*larguraMinima) { setOvalCor('#facc15'); setFaceMsg('Aproxime mais'); setFaceMsgCor('#facc15'); return }
+        if (cx < vw*0.20 || cx > vw*0.80 || cy < vh*0.15 || cy > vh*0.85) { setOvalCor('#facc15'); setFaceMsg('Centralize o rosto'); setFaceMsgCor('#facc15'); return }
         const brilho = calcularBrilho(video)
         if (brilho < FC.minBrilhoCadastro) { setOvalCor('#facc15'); setFaceMsg(`Muito escuro (${Math.round(brilho)}/90)`); setFaceMsgCor('#facc15'); return }
         if (brilho > FC.maxBrilho) { setOvalCor('#facc15'); setFaceMsg('Luz excessiva'); setFaceMsgCor('#facc15'); return }
-        const olhoE = det.landmarks.getLeftEye(), olhoD = det.landmarks.getRightEye()
-        if (calcularAbertura(olhoE) < FC.minAberturaCadastro || calcularAbertura(olhoD) < FC.minAberturaCadastro) { setOvalCor('#facc15'); setFaceMsg('Abra bem os olhos'); setFaceMsgCor('#facc15'); return }
+        if (det.detection.score < 0.8) { setOvalCor('#facc15'); setFaceMsg('Melhore posição/iluminação'); setFaceMsgCor('#facc15'); return }
+
         const nariz = det.landmarks.getNose(), nxRelativo = (nariz[3].x-box.x)/box.width
-        if (nxRelativo < 0.33 || nxRelativo > 0.67) { setOvalCor('#facc15'); setFaceMsg('Olhe para a câmera'); setFaceMsgCor('#facc15'); return }
-        if (det.detection.score < 0.85) { setOvalCor('#facc15'); setFaceMsg('Melhore posição/iluminação'); setFaceMsgCor('#facc15'); return }
-        setOvalCor('#22c55e'); setFaceMsg('✅ Perfeito! Aguardando 3 segundos...'); setFaceMsgCor('#22c55e')
-        await new Promise(r => setTimeout(r, 3000)); if (capturedRef.current) return
-        const canvas = document.createElement('canvas'); canvas.width = video.videoWidth; canvas.height = video.videoHeight
-        const ctx = canvas.getContext('2d'); ctx.translate(canvas.width, 0); ctx.scale(-1, 1); ctx.drawImage(video, 0, 0)
-        capturedRef.current = true; loopRef.current = false
-        if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
-        setFacePreview(canvas.toDataURL('image/jpeg', 0.95)); setFaceDescriptor(Array.from(det.descriptor)); setFaceStatus('capturado'); setFaceMsg('✅ Facial capturada!'); setFaceMsgCor('#22c55e')
+
+        if (pose === 'centro') {
+            const olhoE = det.landmarks.getLeftEye(), olhoD = det.landmarks.getRightEye()
+            if (calcularAbertura(olhoE) < FC.minAberturaCadastro || calcularAbertura(olhoD) < FC.minAberturaCadastro) { setOvalCor('#facc15'); setFaceMsg('Abra bem os olhos'); setFaceMsgCor('#facc15'); return }
+            if (nxRelativo < 0.33 || nxRelativo > 0.67) { setOvalCor('#facc15'); setFaceMsg('Olhe para a câmera'); setFaceMsgCor('#facc15'); return }
+            setOvalCor('#22c55e'); setFaceMsg('✅ Perfeito! Mantendo posição...'); setFaceMsgCor('#22c55e')
+            await new Promise(r => setTimeout(r, 1200)); if (capturedRef.current || poseAtualRef.current !== 'centro') return
+            const canvasFrontal = document.createElement('canvas')
+            canvasFrontal.width = video.videoWidth; canvasFrontal.height = video.videoHeight
+            const ctxFrontal = canvasFrontal.getContext('2d')
+            ctxFrontal.translate(canvasFrontal.width, 0); ctxFrontal.scale(-1, 1)
+            ctxFrontal.drawImage(video, 0, 0)
+            fotoFrontalRef.current = canvasFrontal.toDataURL('image/jpeg', 0.95)
+            setFaceDescriptor(Array.from(det.descriptor))
+            poseAtualRef.current = 'direita'; setPoseAtual('direita')
+            setFaceMsg('Agora vire o rosto para a DIREITA'); setFaceMsgCor('white'); setOvalCor('#ffffff40')
+            return
+        }
+
+        if (pose === 'direita') {
+            if (nxRelativo > 0.45) { setOvalCor('#facc15'); setFaceMsg('Vire mais o rosto para a DIREITA'); setFaceMsgCor('#facc15'); return }
+            setOvalCor('#22c55e'); setFaceMsg('✅ Ótimo! Agora para o outro lado...'); setFaceMsgCor('#22c55e')
+            await new Promise(r => setTimeout(r, 800)); if (capturedRef.current || poseAtualRef.current !== 'direita') return
+            poseAtualRef.current = 'esquerda'; setPoseAtual('esquerda')
+            setFaceMsg('Agora vire o rosto para a ESQUERDA'); setFaceMsgCor('white'); setOvalCor('#ffffff40')
+            return
+        }
+
+        if (pose === 'esquerda') {
+            if (nxRelativo < 0.55) { setOvalCor('#facc15'); setFaceMsg('Vire mais o rosto para a ESQUERDA'); setFaceMsgCor('#facc15'); return }
+            setOvalCor('#22c55e'); setFaceMsg('✅ Confirmado! Finalizando...'); setFaceMsgCor('#22c55e')
+            await new Promise(r => setTimeout(r, 800)); if (capturedRef.current) return
+            capturedRef.current = true; loopRef.current = false
+            if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
+            setFacePreview(fotoFrontalRef.current); poseAtualRef.current = 'concluido'; setPoseAtual('concluido')
+            setFaceStatus('capturado'); setFaceMsg('✅ Facial capturada!'); setFaceMsgCor('#22c55e')
+        }
     }
 
     async function salvarFacial() {
@@ -152,7 +196,7 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
         setSalvandoFacial(false)
     }
 
-    function refazerFacial() { setFaceStatus('idle'); setFaceDescriptor(null); setFacePreview(null); capturedRef.current = false; abrirModalFacial(modalFacial) }
+    function refazerFacial() { setFaceStatus('idle'); setFaceDescriptor(null); setFacePreview(null); capturedRef.current = false; fotoFrontalRef.current = null; poseAtualRef.current = 'centro'; setPoseAtual('centro'); abrirModalFacial(modalFacial) }
 
     const inputCls = 'w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 focus:border-green-500 focus:outline-none text-sm'
 
@@ -161,6 +205,7 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
         promover: { titulo: 'Promover a Admin', msg: 'Este colaborador passará a ter acesso total de administrador.', btn: 'Promover', cor: 'bg-green-500 hover:bg-green-600' },
         rebaixar: { titulo: 'Remover Admin', msg: 'Este colaborador voltará a ser colaborador comum.', btn: 'Confirmar', cor: 'bg-yellow-500 hover:bg-yellow-600' },
         reativar: { titulo: 'Reativar colaborador', msg: 'O colaborador voltará a ter acesso ao sistema.', btn: 'Reativar', cor: 'bg-green-500 hover:bg-green-600' },
+        deletar: { titulo: '⚠️ Excluir permanentemente', msg: 'Esta ação NÃO PODE ser desfeita. Serão apagados para sempre o cadastro, a facial, e TODO o histórico vinculado (pontos, faltas, eventos, lançamentos e correções deste colaborador).', btn: 'Excluir para sempre', cor: 'bg-red-600 hover:bg-red-700' },
     }
 
     return (
@@ -205,6 +250,7 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
                                                 {modo === 'ativos' && c.perfil === 'admin' && c.id !== usuario.id && <button onClick={() => setModalAcao({ colab: c, tipo: 'rebaixar' })} className="text-orange-400 text-xs font-semibold w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-orange-300">⬇ Colab</button>}
                                                 {modo === 'ativos' && c.id !== usuario.id && <button onClick={() => setModalAcao({ colab: c, tipo: 'excluir' })} className="text-red-400 text-xs font-semibold w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-red-300">🚫 Inativar</button>}
                                                 {modo === 'inativos' && <button onClick={() => setModalAcao({ colab: c, tipo: 'reativar' })} className="text-green-400 text-xs font-semibold w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-green-300">✅ Reativar</button>}
+                                                {modo === 'inativos' && <button onClick={() => { setAcaoErro(''); setConfirmacaoTexto(''); setModalAcao({ colab: c, tipo: 'deletar' }) }} className="text-red-500 text-xs font-semibold w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-red-400">🗑️ Excluir</button>}
                                             </div>
                                         </td>
                                     </tr>
@@ -218,14 +264,21 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
 
             {/* Modal confirmação de ação */}
             {modalAcao && (
-                <div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4">
+                <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
                     <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
                         <h3 className="text-white text-lg font-bold mb-2">{acaoInfo[modalAcao.tipo]?.titulo}</h3>
                         <p className="text-gray-400 text-sm mb-1"><span className="text-white font-semibold">{modalAcao.colab.nome}</span></p>
                         <p className="text-gray-400 text-sm mb-5">{acaoInfo[modalAcao.tipo]?.msg}</p>
+                        {modalAcao.tipo === 'deletar' && (
+                            <div className="mb-4">
+                                <label className="block text-gray-400 text-xs mb-1">Digite <span className="text-red-400 font-bold">EXCLUIR</span> para confirmar</label>
+                                <input autoFocus value={confirmacaoTexto} onChange={e => setConfirmacaoTexto(e.target.value)} className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 text-sm focus:border-red-500 focus:outline-none" />
+                            </div>
+                        )}
+                        {acaoErro && <p className="text-red-400 text-xs mb-4">{acaoErro}</p>}
                         <div className="flex gap-3">
-                            <button onClick={() => setModalAcao(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button>
-                            <button onClick={executarAcao} disabled={processandoAcao} className={`flex-1 text-white font-bold py-3 rounded-2xl cursor-pointer disabled:opacity-50 transition-colors ${acaoInfo[modalAcao.tipo]?.cor}`}>{processandoAcao ? 'Aguarde...' : acaoInfo[modalAcao.tipo]?.btn}</button>
+                            <button onClick={() => { setModalAcao(null); setAcaoErro(''); setConfirmacaoTexto('') }} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button>
+                            <button onClick={executarAcao} disabled={processandoAcao || (modalAcao.tipo === 'deletar' && confirmacaoTexto.trim().toUpperCase() !== 'EXCLUIR')} className={`flex-1 text-white font-bold py-3 rounded-2xl cursor-pointer disabled:opacity-50 transition-colors ${acaoInfo[modalAcao.tipo]?.cor}`}>{processandoAcao ? 'Aguarde...' : acaoInfo[modalAcao.tipo]?.btn}</button>
                         </div>
                     </div>
                 </div>
@@ -233,7 +286,7 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
 
             {/* Modal Cadastro */}
             {modalCadastro && (
-                <div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4">
+                <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
                     <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-lg border border-gray-700 max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between mb-6">
                             <h3 className="text-white text-lg font-bold">Cadastrar Colaborador</h3>
@@ -246,9 +299,23 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
                             <div><label className="block text-gray-400 text-sm mb-1">Telefone</label><input className={inputCls} value={form.telefone} onChange={e => setForm({...form, telefone: e.target.value})} /></div>
                             <div><label className="block text-gray-400 text-sm mb-1">Cargo</label><select className={inputCls+' cursor-pointer'} value={form.cargo} onChange={e => setForm({...form, cargo: e.target.value})}><option value="">-- Selecione --</option>{cargos.map(c => <option key={c.id} value={c.nome}>{c.nome}</option>)}</select></div>
                             <div><label className="block text-gray-400 text-sm mb-1">Escala</label><select className={inputCls+' cursor-pointer'} value={form.escala} onChange={e => setForm({...form, escala: e.target.value})}>{ESCALAS.map(e => <option key={e.value} value={e.value}>{e.label}</option>)}</select></div>
-                            <div><label className="block text-gray-400 text-sm mb-1">Salário Fixo</label><input type="text" placeholder="R$ 0,00" className={inputCls} value={form.salario_fixo} onChange={e => setForm({...form, salario_fixo: mascaraMoeda(e.target.value)})} /></div>
-                            <div><label className="block text-gray-400 text-sm mb-1">Ajuda de Custo Mensal</label><input type="text" placeholder="R$ 0,00" className={inputCls} value={form.ajuda_custo} onChange={e => setForm({...form, ajuda_custo: mascaraMoeda(e.target.value)})} /></div>
-                            <div><label className="block text-gray-400 text-sm mb-1">Valor Hora Extra <button type="button" onClick={() => setForm({...form, hora_extra_valor: calcularHoraExtra(form.salario_fixo)})} className="ml-2 text-green-400 text-xs font-normal w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-green-300">↻ calcular automático</button></label><input type="text" placeholder="R$ 0,00" className={inputCls} value={form.hora_extra_valor} onChange={e => setForm({...form, hora_extra_valor: mascaraMoeda(e.target.value)})} /></div>
+                            <div className="md:col-span-2"><label className="block text-gray-400 text-sm mb-1">Salário Fixo</label><input type="text" placeholder="R$ 0,00" className={inputCls} value={form.salario_fixo} onChange={e => setForm({...form, salario_fixo: mascaraMoeda(e.target.value)})} /></div>
+                            <div className="md:col-span-2">
+                                <label className="block text-gray-400 text-sm mb-1">Ajuda de Custo</label>
+                                <div className="flex gap-2 mb-2">
+                                    <button type="button" onClick={() => setForm({...form, ajuda_custo_tipo: 'fixo'})}
+                                        className={`flex-1 text-xs font-semibold py-2 rounded-lg cursor-pointer transition-colors border w-auto ${form.ajuda_custo_tipo === 'fixo' ? 'bg-green-500 text-white border-green-500' : 'bg-gray-800 text-gray-400 border-gray-700'}`}>
+                                        Valor fixo/mês
+                                    </button>
+                                    <button type="button" onClick={() => setForm({...form, ajuda_custo_tipo: 'por_dia'})}
+                                        className={`flex-1 text-xs font-semibold py-2 rounded-lg cursor-pointer transition-colors border w-auto ${form.ajuda_custo_tipo === 'por_dia' ? 'bg-green-500 text-white border-green-500' : 'bg-gray-800 text-gray-400 border-gray-700'}`}>
+                                        Por dia presencial
+                                    </button>
+                                </div>
+                                <input type="text" placeholder="R$ 0,00" className={inputCls} value={form.ajuda_custo} onChange={e => setForm({...form, ajuda_custo: mascaraMoeda(e.target.value)})} />
+                                <p className="text-gray-600 text-xs mt-1">{form.ajuda_custo_tipo === 'por_dia' ? 'Valor pago só nos dias em que bater o ponto' : 'Valor pago todo mês, independente de faltas'}</p>
+                            </div>
+                            <div><label className="block text-gray-400 text-sm mb-1">Valor Hora Extra <button type="button" onClick={() => setForm({...form, hora_extra_valor: calcularHoraExtra(form.salario_fixo)})} className="ml-2 text-green-400 text-xs font-normal w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-green-300">↻ calcular automático</button></label><input type="text" placeholder="R$ 0,00" className={inputCls} value={form.hora_extra_valor} onChange={e => setForm({...form, hora_extra_valor: mascaraMoeda(e.target.value)})} /><p className="text-gray-600 text-xs mt-1">Salário ÷ 30 ÷ 9h + 50%</p></div>
                             <div><label className="block text-gray-400 text-sm mb-1">Cachê de Evento</label><input type="text" placeholder="R$ 0,00" className={inputCls} value={form.cache_evento} onChange={e => setForm({...form, cache_evento: mascaraMoeda(e.target.value)})} /></div>
                             {msg && <p className="md:col-span-2 text-red-400 text-sm">{msg}</p>}
                             <div className="md:col-span-2 flex gap-3 mt-2">
@@ -262,12 +329,19 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
 
             {/* Modal Facial */}
             {modalFacial && (
-                <div className="fixed inset-0 bg-black bg-opacity-80 z-50 flex items-center justify-center p-4">
+                <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
                     <div className="w-full max-w-xs">
                         <div className="flex justify-between items-center mb-4">
                             <div><h3 className="text-white text-lg font-bold">Cadastrar Facial</h3><p className="text-gray-400 text-sm">{modalFacial.nome}</p></div>
                             <button onClick={fecharModalFacial} className="text-gray-400 hover:text-white w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer text-2xl">✕</button>
                         </div>
+                        {faceStatus !== 'capturado' && (
+                            <div className="flex justify-center gap-2 mb-3">
+                                {['centro', 'direita', 'esquerda'].map((p, i) => (
+                                    <div key={p} className={`h-1.5 rounded-full transition-colors ${poseAtual === p ? 'bg-green-500 w-8' : (['centro','direita','esquerda'].indexOf(poseAtual) > i) ? 'bg-green-700 w-6' : 'bg-gray-700 w-6'}`} />
+                                ))}
+                            </div>
+                        )}
                         <div className="relative rounded-3xl overflow-hidden bg-black mb-4" style={{ height: '320px' }}>
                             {facePreview ? <img src={facePreview} className="w-full h-full object-cover" alt="Foto" /> : (
                                 <>

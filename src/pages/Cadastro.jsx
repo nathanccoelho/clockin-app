@@ -51,6 +51,10 @@ function gerarCodigo() {
   return String(Math.floor(100000 + Math.random() * 900000))
 }
 
+// Modo teste do código de verificação — DESATIVADO. Se voltar a dar problema com o
+// Brevo, pode ligar de novo temporariamente colocando "true" aqui.
+const MOSTRAR_CODIGO_NA_TELA_TESTE = false
+
 export default function Cadastro({ onVoltar }) {
   const [etapa, setEtapa] = useState('dados') // dados | senha | verificacao | facial | sucesso
   const [form, setForm] = useState({
@@ -77,6 +81,9 @@ export default function Cadastro({ onVoltar }) {
   const [faceMsg, setFaceMsg] = useState('')
   const [faceMsgCor, setFaceMsgCor] = useState('#aaa')
   const [ovalCor, setOvalCor] = useState('#ffffff40')
+  const [poseAtual, setPoseAtual] = useState('centro') // centro | direita | esquerda | concluido
+  const poseAtualRef = useRef('centro')
+  const fotoFrontalRef = useRef(null)
   const [salvando, setSalvando] = useState(false)
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -177,6 +184,7 @@ export default function Cadastro({ onVoltar }) {
         body: { email: form.email, nome: form.nome, codigo }
       })
       if (error) throw error
+      if (MOSTRAR_CODIGO_NA_TELA_TESTE) setErro(`MODO TESTE: código ${codigo}`)
     } catch {
       setErro(`DEV: código ${codigo} (configure Edge Function para envio real)`)
     }
@@ -209,6 +217,8 @@ export default function Cadastro({ onVoltar }) {
     setFaceStatus('idle')
     setFaceDescriptor(null)
     setFacePreview(null)
+    setPoseAtual('centro')
+    poseAtualRef.current = 'centro'
     setFaceMsg('Carregando reconhecimento facial...')
     setFaceMsgCor('#aaa')
     setOvalCor('#ffffff40')
@@ -221,7 +231,7 @@ export default function Cadastro({ onVoltar }) {
         await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
       }
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false
+        video: { facingMode: 'user', width: { ideal: 480 }, height: { ideal: 640 } }, audio: false
       })
       streamRef.current = stream
       await new Promise(r => setTimeout(r, 150))
@@ -292,45 +302,74 @@ export default function Cadastro({ onVoltar }) {
     const { box } = det.detection
     const vw = video.videoWidth, vh = video.videoHeight
     const cx = box.x + box.width / 2, cy = box.y + box.height / 2
+    const pose = poseAtualRef.current
+    const larguraMinima = pose === 'centro' ? 0.32 : 0.20
 
-    if (box.width < vw * 0.32) { setOvalCor('#facc15'); setFaceMsg('Aproxime mais o rosto'); setFaceMsgCor('#facc15'); return }
-    if (cx < vw * 0.28 || cx > vw * 0.72 || cy < vh * 0.18 || cy > vh * 0.82) { setOvalCor('#facc15'); setFaceMsg('Centralize o rosto no oval'); setFaceMsgCor('#facc15'); return }
+    if (box.width < vw * larguraMinima) { setOvalCor('#facc15'); setFaceMsg('Aproxime mais o rosto'); setFaceMsgCor('#facc15'); return }
+    if (cx < vw * 0.20 || cx > vw * 0.80 || cy < vh * 0.15 || cy > vh * 0.85) { setOvalCor('#facc15'); setFaceMsg('Centralize o rosto no oval'); setFaceMsgCor('#facc15'); return }
 
     const brilho = calcularBrilho(video)
     if (brilho < 90) { setOvalCor('#facc15'); setFaceMsg(`Muito escuro (${Math.round(brilho)}/90)`); setFaceMsgCor('#facc15'); return }
     if (brilho > 200) { setOvalCor('#facc15'); setFaceMsg('Luz excessiva'); setFaceMsgCor('#facc15'); return }
 
-    const olhoE = det.landmarks.getLeftEye(), olhoD = det.landmarks.getRightEye()
-    if (calcularAbertura(olhoE) < 0.24 || calcularAbertura(olhoD) < 0.24) { setOvalCor('#facc15'); setFaceMsg('Abra bem os olhos'); setFaceMsgCor('#facc15'); return }
+    if (det.detection.score < 0.8) { setOvalCor('#facc15'); setFaceMsg('Melhore posição e iluminação'); setFaceMsgCor('#facc15'); return }
 
     const nariz = det.landmarks.getNose()
     const nxRelativo = (nariz[3].x - box.x) / box.width
-    if (nxRelativo < 0.33 || nxRelativo > 0.67) { setOvalCor('#facc15'); setFaceMsg('Olhe diretamente para a câmera'); setFaceMsgCor('#facc15'); return }
 
-    if (det.detection.score < 0.85) { setOvalCor('#facc15'); setFaceMsg('Melhore posição e iluminação'); setFaceMsgCor('#facc15'); return }
+    // ── Passo 1: olhando de frente ──
+    if (pose === 'centro') {
+      const olhoE = det.landmarks.getLeftEye(), olhoD = det.landmarks.getRightEye()
+      if (calcularAbertura(olhoE) < 0.24 || calcularAbertura(olhoD) < 0.24) { setOvalCor('#facc15'); setFaceMsg('Abra bem os olhos'); setFaceMsgCor('#facc15'); return }
+      if (nxRelativo < 0.33 || nxRelativo > 0.67) { setOvalCor('#facc15'); setFaceMsg('Olhe diretamente para a câmera'); setFaceMsgCor('#facc15'); return }
 
-    setOvalCor('#22c55e')
-    setFaceMsg('✅ Perfeito! Mantendo posição por 3 segundos...')
-    setFaceMsgCor('#22c55e')
+      setOvalCor('#22c55e'); setFaceMsg('✅ Perfeito! Mantendo posição...'); setFaceMsgCor('#22c55e')
+      await new Promise(r => setTimeout(r, 1200))
+      if (capturedRef.current || poseAtualRef.current !== 'centro') return
 
-    await new Promise(r => setTimeout(r, 3000))
-    if (capturedRef.current) return
+      // Guarda o descritor e a FOTO de frente — é essa foto que vira a foto de perfil,
+      // e é esse descritor que será usado pra bater o ponto depois
+      const canvasFrontal = document.createElement('canvas')
+      canvasFrontal.width = video.videoWidth; canvasFrontal.height = video.videoHeight
+      const ctxFrontal = canvasFrontal.getContext('2d')
+      ctxFrontal.translate(canvasFrontal.width, 0); ctxFrontal.scale(-1, 1)
+      ctxFrontal.drawImage(video, 0, 0)
+      fotoFrontalRef.current = canvasFrontal.toDataURL('image/jpeg', 0.95)
 
-    const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth; canvas.height = video.videoHeight
-    const ctx = canvas.getContext('2d')
-    ctx.translate(canvas.width, 0); ctx.scale(-1, 1)
-    ctx.drawImage(video, 0, 0)
+      setFaceDescriptor(Array.from(det.descriptor))
+      poseAtualRef.current = 'direita'; setPoseAtual('direita')
+      setFaceMsg('Agora vire o rosto para a DIREITA'); setFaceMsgCor('white'); setOvalCor('#ffffff40')
+      return
+    }
 
-    capturedRef.current = true
-    loopRef.current = false
-    pararFacial()
+    // ── Passo 2: vira para um lado ──
+    if (pose === 'direita') {
+      if (nxRelativo > 0.45) { setOvalCor('#facc15'); setFaceMsg('Vire mais o rosto para a DIREITA'); setFaceMsgCor('#facc15'); return }
+      setOvalCor('#22c55e'); setFaceMsg('✅ Ótimo! Agora para o outro lado...'); setFaceMsgCor('#22c55e')
+      await new Promise(r => setTimeout(r, 800))
+      if (capturedRef.current || poseAtualRef.current !== 'direita') return
+      poseAtualRef.current = 'esquerda'; setPoseAtual('esquerda')
+      setFaceMsg('Agora vire o rosto para a ESQUERDA'); setFaceMsgCor('white'); setOvalCor('#ffffff40')
+      return
+    }
 
-    setFacePreview(canvas.toDataURL('image/jpeg', 0.95))
-    setFaceDescriptor(Array.from(det.descriptor))
-    setFaceStatus('capturado')
-    setFaceMsg('✅ Facial capturada com sucesso!')
-    setFaceMsgCor('#22c55e')
+    // ── Passo 3: vira para o outro lado ──
+    if (pose === 'esquerda') {
+      if (nxRelativo < 0.55) { setOvalCor('#facc15'); setFaceMsg('Vire mais o rosto para a ESQUERDA'); setFaceMsgCor('#facc15'); return }
+      setOvalCor('#22c55e'); setFaceMsg('✅ Confirmado! Finalizando...'); setFaceMsgCor('#22c55e')
+      await new Promise(r => setTimeout(r, 800))
+      if (capturedRef.current) return
+
+      capturedRef.current = true
+      loopRef.current = false
+      pararFacial()
+
+      setFacePreview(fotoFrontalRef.current)
+      poseAtualRef.current = 'concluido'; setPoseAtual('concluido')
+      setFaceStatus('capturado')
+      setFaceMsg('✅ Facial capturada com sucesso!')
+      setFaceMsgCor('#22c55e')
+    }
   }
 
   async function handleCadastro() {
@@ -348,6 +387,7 @@ export default function Cadastro({ onVoltar }) {
       data_nascimento: form.data_nascimento || null,
       face_descriptor: JSON.stringify(faceDescriptor),
       face_cadastrada_em: new Date().toISOString(),
+      foto_perfil: facePreview,
       status: 'pendente',
       perfil: 'colaborador',
       empresa_id: null,
@@ -364,6 +404,8 @@ export default function Cadastro({ onVoltar }) {
     setFaceDescriptor(null)
     setFacePreview(null)
     capturedRef.current = false
+    fotoFrontalRef.current = null
+    poseAtualRef.current = 'centro'; setPoseAtual('centro')
     setOvalCor('#ffffff40')
     setFaceMsg('Posicione seu rosto dentro do oval')
     setFaceMsgCor('#aaa')
@@ -393,9 +435,16 @@ export default function Cadastro({ onVoltar }) {
     <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-4">
       <div className="w-full max-w-xs">
         <h2 className="text-white text-2xl font-bold text-center mb-1">Cadastro Facial</h2>
-        <p className="text-gray-400 text-center text-sm mb-4">
-          {faceStatus === 'capturado' ? 'Confirme sua foto abaixo' : 'Posicione seu rosto no oval e aguarde'}
+        <p className="text-gray-400 text-center text-sm mb-2">
+          {faceStatus === 'capturado' ? 'Confirme sua foto abaixo' : 'Siga as instruções na tela'}
         </p>
+        {faceStatus !== 'capturado' && (
+          <div className="flex justify-center gap-2 mb-4">
+            {['centro', 'direita', 'esquerda'].map((p, i) => (
+              <div key={p} className={`h-1.5 rounded-full transition-colors ${poseAtual === p ? 'bg-green-500 w-8' : (['centro','direita','esquerda'].indexOf(poseAtual) > i) ? 'bg-green-700 w-6' : 'bg-gray-700 w-6'}`} />
+            ))}
+          </div>
+        )}
         <div className="relative rounded-3xl overflow-hidden bg-black mb-4" style={{ height: '320px' }}>
           {facePreview ? (
             <img src={facePreview} className="w-full h-full object-cover" alt="Foto capturada" />
@@ -471,7 +520,7 @@ export default function Cadastro({ onVoltar }) {
           </div>
 
           {erro && (
-            <p className={`text-sm text-center ${erro.startsWith('DEV:') ? 'text-yellow-400 bg-yellow-500 bg-opacity-10 rounded-xl p-3' : 'text-red-400'}`}>
+            <p className={`text-sm text-center ${(erro.startsWith('DEV:') || erro.startsWith('MODO TESTE:')) ? 'text-yellow-400 bg-yellow-500/10 rounded-xl p-3' : 'text-red-400'}`}>
               {erro}
             </p>
           )}

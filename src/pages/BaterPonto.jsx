@@ -6,6 +6,9 @@ const VARANDA_LAT = -23.61496
 const VARANDA_LNG = -46.69607
 const RAIO_METROS = 100
 
+// Validação de localização (100m) — ATIVA. Só volte pra "true" se precisar testar de novo.
+const DESATIVAR_VALIDACAO_LOCALIZACAO_TESTE = false
+
 function distanciaMetros(lat1, lon1, lat2, lon2) {
     const R = 6371000, dLat = (lat2-lat1)*Math.PI/180, dLon = (lon2-lon1)*Math.PI/180
     const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2
@@ -62,7 +65,7 @@ export default function BaterPonto({ usuario }) {
         )
     }
 
-    const dentroDoRaio = distancia !== null && distancia <= RAIO_METROS
+    const dentroDoRaio = DESATIVAR_VALIDACAO_LOCALIZACAO_TESTE || (distancia !== null && distancia <= RAIO_METROS)
     const temEntrada = registroHoje?.entrada, temSaida = registroHoje?.saida
 
     async function registrarPonto(tipo) {
@@ -71,6 +74,8 @@ export default function BaterPonto({ usuario }) {
         try {
             if (tipo === 'entrada') {
                 await supabase.from('registros_ponto').insert({ colaborador_id: usuario.id, empresa_id: usuario.empresa_id, data: hoje, categoria: 'FIXO MENSAL', entrada: agora.toISOString(), metodo: 'App Facial' })
+                // Se existia uma falta marcada pra hoje (gerada antes de bater o ponto), remove — já que o colaborador apareceu.
+                await supabase.from('faltas').delete().eq('colaborador_id', usuario.id).eq('data', hoje).eq('status', 'falta')
             } else {
                 const { data: reg } = await supabase.from('registros_ponto').select('*').eq('colaborador_id', usuario.id).eq('data', hoje).is('saida', null).order('criado_em', { ascending: false }).limit(1).maybeSingle()
                 if (reg) { const horas = (agora - new Date(reg.entrada))/(1000*60*60); await supabase.from('registros_ponto').update({ saida: agora.toISOString(), horas_trabalhadas: horas }).eq('id', reg.id) }
@@ -99,29 +104,52 @@ export default function BaterPonto({ usuario }) {
     function cancelarFacial() { pararCamera(); setEtapa('inicio') }
     async function loopFacial() { if (!loopRef.current) return; await analisarFrame(); if (loopRef.current) setTimeout(loopFacial, 700) }
 
+    async function verificarFrameContraCadastro(raw) {
+        const video = videoRef.current
+        const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: FC.inputSize, scoreThreshold: FC.scoreThreshold })).withFaceLandmarks().withFaceDescriptor()
+        if (!det) return { ok: false, msg: 'Posicione seu rosto no oval' }
+        const { box } = det.detection, vw = video.videoWidth, vh = video.videoHeight
+        const cx = box.x+box.width/2, cy = box.y+box.height/2
+        if (box.width < vw*FC.minFaceWidthReconhecimento) return { ok: false, msg: 'Aproxime mais o rosto' }
+        if (cx < vw*FC.minCX || cx > vw*FC.maxCX || cy < vh*FC.minCY || cy > vh*FC.maxCY) return { ok: false, msg: 'Centralize o rosto' }
+        if (calcularBrilho(video) < FC.minBrilhoReconhecimento) return { ok: false, msg: 'Melhore a iluminação' }
+        const olhoE = det.landmarks.getLeftEye(), olhoD = det.landmarks.getRightEye()
+        if (calcularAbertura(olhoE) < FC.minAberturaReconhecimento || calcularAbertura(olhoD) < FC.minAberturaReconhecimento) return { ok: false, msg: 'Abra bem os olhos — nada cobrindo o rosto' }
+        const distFacial = faceapi.euclideanDistance(det.descriptor, new Float32Array(raw))
+        if (distFacial > FC.maxDistancia) return { ok: false, msg: 'Rosto não reconhecido' }
+        return { ok: true }
+    }
+
     async function analisarFrame() {
         if (capturedRef.current) return
         const video = videoRef.current; if (!video || video.readyState < 2) return
         const { data: colabData } = await supabase.from('colaboradores').select('face_descriptor').eq('id', usuario.id).single()
         if (!colabData?.face_descriptor) { setFaceMsg('Facial não cadastrada. Contate o admin.'); setFaceMsgCor('#ef4444'); loopRef.current = false; return }
-        const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: FC.inputSize, scoreThreshold: FC.scoreThreshold })).withFaceLandmarks().withFaceDescriptor()
-        if (!det) { setOvalCor('#ffffff40'); setFaceMsg('Posicione seu rosto no oval'); setFaceMsgCor('#aaa'); return }
-        const { box } = det.detection, vw = video.videoWidth, vh = video.videoHeight
-        const cx = box.x+box.width/2, cy = box.y+box.height/2
-        if (box.width < vw*FC.minFaceWidthReconhecimento) { setOvalCor('#facc15'); setFaceMsg('Aproxime mais o rosto'); setFaceMsgCor('#facc15'); return }
-        if (cx < vw*FC.minCX || cx > vw*FC.maxCX || cy < vh*FC.minCY || cy > vh*FC.maxCY) { setOvalCor('#facc15'); setFaceMsg('Centralize o rosto'); setFaceMsgCor('#facc15'); return }
-        if (calcularBrilho(video) < FC.minBrilhoReconhecimento) { setOvalCor('#facc15'); setFaceMsg('Melhore a iluminação'); setFaceMsgCor('#facc15'); return }
-        const olhoE = det.landmarks.getLeftEye(), olhoD = det.landmarks.getRightEye()
-        if (calcularAbertura(olhoE) < FC.minAberturaReconhecimento || calcularAbertura(olhoD) < FC.minAberturaReconhecimento) { setOvalCor('#facc15'); setFaceMsg('Abra bem os olhos'); setFaceMsgCor('#facc15'); return }
         const raw = typeof colabData.face_descriptor === 'string' ? JSON.parse(colabData.face_descriptor) : colabData.face_descriptor
         if (!Array.isArray(raw) || raw.length !== 128) { setFaceMsg('Facial inválida. Recadastre com o admin.'); setFaceMsgCor('#ef4444'); loopRef.current = false; return }
-        const distFacial = faceapi.euclideanDistance(det.descriptor, new Float32Array(raw))
-        if (distFacial > FC.maxDistancia) { setOvalCor('#ef4444'); setFaceMsg('Rosto não reconhecido'); setFaceMsgCor('#ef4444'); return }
-        setOvalCor('#22c55e'); setFaceMsg('✅ Reconhecido! Aguarde 3 segundos...'); setFaceMsgCor('#22c55e')
-        await new Promise(r => setTimeout(r, 1000)); setFaceMsg('⏳ 2 segundos...')
-        await new Promise(r => setTimeout(r, 1000)); setFaceMsg('⏳ 1 segundo...')
-        await new Promise(r => setTimeout(r, 1000))
-        if (capturedRef.current) return
+
+        const primeiraChecagem = await verificarFrameContraCadastro(raw)
+        if (!primeiraChecagem.ok) {
+            setOvalCor(primeiraChecagem.msg.includes('reconhecido') ? '#ef4444' : '#facc15')
+            setFaceMsg(primeiraChecagem.msg); setFaceMsgCor(primeiraChecagem.msg.includes('reconhecido') ? '#ef4444' : '#facc15')
+            return
+        }
+
+        // Reconhecido no primeiro frame — agora CONTINUA verificando por mais 3 segundos.
+        // Se em qualquer momento a checagem falhar (rosto tampado, virou o rosto, etc.),
+        // cancela e volta a escanear, em vez de confiar cegamente num único instante.
+        setOvalCor('#22c55e'); setFaceMsg('✅ Reconhecido! Confirmando...'); setFaceMsgCor('#22c55e')
+        for (let i = 3; i >= 1; i--) {
+            await new Promise(r => setTimeout(r, 1000))
+            if (capturedRef.current || !loopRef.current) return
+            const checagem = await verificarFrameContraCadastro(raw)
+            if (!checagem.ok) {
+                setOvalCor('#facc15'); setFaceMsg(checagem.msg); setFaceMsgCor('#facc15')
+                return
+            }
+            if (i > 1) setFaceMsg(`✅ Reconhecido! Mantenha a posição — ${i - 1}s...`)
+        }
+
         capturedRef.current = true; loopRef.current = false; pararCamera(); tocarSom()
         await registrarPonto(acaoRef.current)
     }
@@ -132,6 +160,12 @@ export default function BaterPonto({ usuario }) {
         <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-4">
             <div className="w-full max-w-xs">
                 <h2 className="text-white text-2xl font-bold text-center mb-1">{acao === 'entrada' ? 'Confirmar Entrada' : 'Confirmar Saída'}</h2>
+                <div className="flex items-center justify-center gap-2 mb-3">
+                    <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-700 flex-shrink-0 flex items-center justify-center">
+                        {usuario.foto_perfil ? <img src={usuario.foto_perfil} className="w-full h-full object-cover" alt="" /> : <span className="text-white text-xs font-bold">{usuario.nome?.charAt(0).toUpperCase()}</span>}
+                    </div>
+                    <p className="text-gray-300 text-sm font-semibold">Comparando com: {usuario.nome}</p>
+                </div>
                 <p className="text-gray-400 text-center text-sm mb-4">Posicione seu rosto para confirmar</p>
                 <div className="relative rounded-3xl overflow-hidden bg-black mb-4" style={{ height: '380px' }}>
                     <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
@@ -149,7 +183,11 @@ export default function BaterPonto({ usuario }) {
     if (etapa === 'sucesso') return (
         <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
             <div className="text-center">
-                <div className="text-7xl mb-6">{acao === 'entrada' ? '🟢' : '🔴'}</div>
+                <div className="w-24 h-24 rounded-full overflow-hidden mx-auto mb-4 border-4" style={{ borderColor: acao === 'entrada' ? '#22c55e' : '#ef4444' }}>
+                    {usuario.foto_perfil ? <img src={usuario.foto_perfil} className="w-full h-full object-cover" alt="" /> : <div className="w-full h-full bg-gray-700 flex items-center justify-center text-white text-3xl font-bold">{usuario.nome?.charAt(0).toUpperCase()}</div>}
+                </div>
+                <p className="text-white text-xl font-bold mb-1">{usuario.nome}</p>
+                <div className="text-4xl mb-4">{acao === 'entrada' ? '🟢' : '🔴'}</div>
                 <h2 className="text-white text-3xl font-bold mb-2">{acao === 'entrada' ? 'Entrada registrada!' : 'Saída registrada!'}</h2>
                 <p className="text-gray-400 mb-2">{new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
                 <p className="text-gray-500 text-sm mb-8">{new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
@@ -160,18 +198,23 @@ export default function BaterPonto({ usuario }) {
 
     return (
         <div className="space-y-4">
+            {DESATIVAR_VALIDACAO_LOCALIZACAO_TESTE && (
+                <div className="bg-yellow-500/20 border border-yellow-500/40 rounded-xl p-3 text-center">
+                    <p className="text-yellow-400 text-xs font-bold">⚠️ MODO TESTE: validação de localização (100m) está DESATIVADA. Não use assim em produção.</p>
+                </div>
+            )}
             <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
                 <div className="flex justify-between items-start mb-6">
                     <div><h2 className="text-white text-xl font-bold">Meu Clockin</h2><p className="text-gray-400 text-sm">{new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p></div>
-                    <div className={`px-3 py-1 rounded-full text-xs font-bold ${temSaida ? 'bg-gray-700 text-gray-300' : temEntrada ? 'bg-green-500 bg-opacity-20 text-green-400 border border-green-500 border-opacity-30' : 'bg-gray-800 text-gray-500'}`}>{temSaida ? 'Finalizado' : temEntrada ? 'Em operação' : 'Pendente'}</div>
+                    <div className={`px-3 py-1 rounded-full text-xs font-bold ${temSaida ? 'bg-gray-700 text-gray-300' : temEntrada ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-gray-800 text-gray-500'}`}>{temSaida ? 'Finalizado' : temEntrada ? 'Em operação' : 'Pendente'}</div>
                 </div>
                 <div className="grid grid-cols-2 gap-4 mb-6">
                     <div className="bg-gray-800 rounded-xl p-4 text-center"><p className="text-gray-400 text-xs mb-1">Entrada</p><p className={`text-2xl font-bold ${temEntrada ? 'text-green-400' : 'text-gray-600'}`}>{horaFormatada(registroHoje?.entrada)}</p></div>
                     <div className="bg-gray-800 rounded-xl p-4 text-center"><p className="text-gray-400 text-xs mb-1">Saída</p><p className={`text-2xl font-bold ${temSaida ? 'text-red-400' : 'text-gray-600'}`}>{horaFormatada(registroHoje?.saida)}</p></div>
                 </div>
-                <div className={`rounded-xl p-3 mb-4 flex items-center gap-3 ${erroLoc ? 'bg-red-500 bg-opacity-10 border border-red-500 border-opacity-30' : distancia === null ? 'bg-gray-800' : dentroDoRaio ? 'bg-green-500 bg-opacity-10 border border-green-500 border-opacity-30' : 'bg-red-500 bg-opacity-10 border border-red-500 border-opacity-30'}`}>
+                <div className={`rounded-xl p-3 mb-4 flex items-center gap-3 ${erroLoc ? 'bg-red-500/10 border border-red-500/30' : distancia === null ? 'bg-gray-800' : dentroDoRaio ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
                     <span className="text-xl">📍</span>
-                    <div>{erroLoc ? <p className="text-red-400 text-sm">{erroLoc}</p> : distancia === null ? <p className="text-gray-400 text-sm">Verificando localização...</p> : dentroDoRaio ? <p className="text-white text-sm font-semibold">✅ Você está no local ({distancia}m)</p> : <p className="text-red-400 text-sm font-semibold">❌ Fora do raio permitido ({distancia}m de {RAIO_METROS}m)</p>}</div>
+                    <div>{erroLoc ? <p className="text-red-400 text-sm">{erroLoc}</p> : distancia === null ? <p className="text-gray-400 text-sm">Verificando localização...</p> : DESATIVAR_VALIDACAO_LOCALIZACAO_TESTE ? <p className="text-yellow-400 text-sm font-semibold">⚠️ Localização real: {distancia}m (ignorada — modo teste)</p> : dentroDoRaio ? <p className="text-white text-sm font-semibold">✅ Você está no local ({distancia}m)</p> : <p className="text-red-400 text-sm font-semibold">❌ Fora do raio permitido ({distancia}m de {RAIO_METROS}m)</p>}</div>
                 </div>
                 {loading ? <p className="text-gray-500 text-center">Carregando...</p> : temSaida ? (
                     <div className="bg-gray-800 rounded-xl p-4 text-center"><p className="text-gray-400">Clockin do dia finalizado</p><p className="text-white font-bold mt-1">{Number(registroHoje?.horas_trabalhadas || 0).toFixed(1)}h trabalhadas</p></div>

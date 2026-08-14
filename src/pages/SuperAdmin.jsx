@@ -11,6 +11,10 @@ export default function SuperAdmin({ usuario, onEntrarEmpresa, onLogout }) {
   const [stats, setStats] = useState({})
   const [modalExcluir, setModalExcluir] = useState(null)
   const [excluindo, setExcluindo] = useState(false)
+  const [modalEditar, setModalEditar] = useState(null)
+  const [formEditar, setFormEditar] = useState({ nome: '', cnpj: '' })
+  const [salvandoEdicao, setSalvandoEdicao] = useState(false)
+  const [msgEdicao, setMsgEdicao] = useState('')
 
   useEffect(() => { carregar() }, [])
 
@@ -43,6 +47,20 @@ export default function SuperAdmin({ usuario, onEntrarEmpresa, onLogout }) {
     setModalExcluir(null); setExcluindo(false); carregar()
   }
 
+  function abrirEdicao(emp) {
+    setFormEditar({ nome: emp.nome || '', cnpj: emp.cnpj || '' })
+    setMsgEdicao('')
+    setModalEditar(emp)
+  }
+
+  async function salvarEdicao() {
+    if (!formEditar.nome.trim()) return
+    setSalvandoEdicao(true); setMsgEdicao('')
+    const { error } = await supabase.from('empresas').update({ nome: formEditar.nome.trim(), cnpj: formEditar.cnpj.trim() || null }).eq('id', modalEditar.id)
+    if (error) { setMsgEdicao('Erro ao salvar: ' + error.message); setSalvandoEdicao(false); return }
+    setSalvandoEdicao(false); setModalEditar(null); carregar()
+  }
+
   const inputCls = 'w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 focus:border-green-500 focus:outline-none text-sm'
 
   return (
@@ -73,7 +91,8 @@ export default function SuperAdmin({ usuario, onEntrarEmpresa, onLogout }) {
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => onEntrarEmpresa(emp)} className="bg-blue-500 text-white font-bold py-2 px-5 rounded-xl hover:bg-blue-600 cursor-pointer transition-colors text-sm w-auto">Entrar →</button>
-                  <button onClick={() => setModalExcluir(emp)} className="bg-red-500 bg-opacity-20 text-red-400 font-bold py-2 px-3 rounded-xl hover:bg-opacity-30 cursor-pointer transition-colors text-sm w-auto border border-red-500 border-opacity-30">✕</button>
+                  <button onClick={() => abrirEdicao(emp)} className="bg-gray-700 text-gray-200 font-bold py-2 px-3 rounded-xl hover:bg-gray-600 cursor-pointer transition-colors text-sm w-auto border border-gray-600">✏️</button>
+                  <button onClick={() => setModalExcluir(emp)} className="bg-red-500/20 text-red-400 font-bold py-2 px-3 rounded-xl hover:bg-red-500/30 cursor-pointer transition-colors text-sm w-auto border border-red-500/30">✕</button>
                 </div>
               </div>
             ))}
@@ -84,7 +103,7 @@ export default function SuperAdmin({ usuario, onEntrarEmpresa, onLogout }) {
 
       {/* Modal nova empresa */}
       {modalNova && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
           <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-white text-lg font-bold">Nova Empresa</h3>
@@ -103,9 +122,30 @@ export default function SuperAdmin({ usuario, onEntrarEmpresa, onLogout }) {
         </div>
       )}
 
+      {/* Modal editar empresa */}
+      {modalEditar && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-white text-lg font-bold">Editar Empresa</h3>
+              <button onClick={() => setModalEditar(null)} className="text-gray-400 hover:text-white w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer text-2xl">✕</button>
+            </div>
+            <div className="space-y-3">
+              <div><label className="text-gray-400 text-xs mb-1 block">Nome da empresa *</label><input className={inputCls} value={formEditar.nome} onChange={e => setFormEditar(f => ({...f, nome: e.target.value}))} placeholder="Ex: Varanda Estaiada" /></div>
+              <div><label className="text-gray-400 text-xs mb-1 block">CNPJ</label><input className={inputCls} value={formEditar.cnpj} onChange={e => setFormEditar(f => ({...f, cnpj: e.target.value}))} placeholder="00.000.000/0001-00" /></div>
+              {msgEdicao && <p className={`text-sm font-semibold ${msgEdicao.includes('Erro') ? 'text-red-400' : 'text-green-400'}`}>{msgEdicao}</p>}
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => setModalEditar(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">Cancelar</button>
+              <button onClick={salvarEdicao} disabled={salvandoEdicao || !formEditar.nome.trim()} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{salvandoEdicao ? 'Salvando...' : 'Salvar alterações'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal excluir empresa */}
       {modalExcluir && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
           <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
             <h3 className="text-white text-lg font-bold mb-2">Excluir empresa</h3>
             <p className="text-gray-400 text-sm mb-1">Tem certeza que deseja excluir <span className="text-white font-bold">{modalExcluir.nome}</span>?</p>
