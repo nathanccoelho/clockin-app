@@ -116,7 +116,7 @@ export default function Login({ onLogin }) {
         <div className="text-center mb-8"><div className="text-5xl mb-4">📧</div><h2 className="text-white text-2xl font-bold mb-2">Verifique seu email</h2><p className="text-gray-400 text-sm">Enviamos um código para<br /><span className="text-green-400 font-semibold">{emailRecuperar}</span></p></div>
         <div className="space-y-4">
           <input type="text" maxLength={6} placeholder="000000" value={codigoDigitado} onChange={e => setCodigoDigitado(e.target.value.replace(/\D/g, '').slice(0, 6))} className="w-full bg-gray-800 text-white border border-gray-700 rounded-2xl p-4 text-2xl text-center tracking-widest placeholder-gray-600 focus:border-green-500 focus:outline-none" />
-          {erro && <p className={`text-sm text-center ${erro.startsWith('DEV:') ? 'text-yellow-400 bg-yellow-500 bg-opacity-10 rounded-xl p-3' : 'text-red-400'}`}>{erro}</p>}
+          {erro && <p className={`text-sm text-center ${erro.startsWith('DEV:') ? 'text-yellow-400 bg-yellow-500/10 rounded-xl p-3' : 'text-red-400'}`}>{erro}</p>}
           <button onClick={verificarCodigoRecuperacao} disabled={codigoDigitado.length !== 6} className="w-full bg-green-500 text-white font-bold py-4 rounded-2xl text-lg hover:bg-green-600 disabled:opacity-50 cursor-pointer transition-colors">Verificar código</button>
           <div className="text-center">{reenvioTimer > 0 ? <p className="text-gray-500 text-sm">Reenviar em {reenvioTimer}s</p> : <button onClick={enviarCodigoRecuperacao} className="text-green-400 text-sm font-semibold w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-green-300">Reenviar código</button>}</div>
         </div>

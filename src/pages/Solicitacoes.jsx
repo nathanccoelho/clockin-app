@@ -20,9 +20,9 @@ export default function Solicitacoes({ usuario }) {
         <div className="space-y-4">
             <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
                 <h2 className="text-white text-xl font-bold mb-5">Minhas Solicitações</h2>
-                <div className="flex gap-2 mb-5">
+                <div className="flex flex-wrap gap-2 mb-5">
                     {[{ key: 'todas', label: 'Todas' }, { key: 'pendente', label: 'Pendentes' }, { key: 'aprovado', label: 'Aprovadas' }, { key: 'recusado', label: 'Recusadas' }].map(f => (
-                        <button key={f.key} onClick={() => setFiltro(f.key)} className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-colors w-auto ${filtro === f.key ? 'bg-green-500 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>{f.label}</button>
+                        <button key={f.key} onClick={() => setFiltro(f.key)} className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-colors w-auto flex-shrink-0 ${filtro === f.key ? 'bg-green-500 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>{f.label}</button>
                     ))}
                 </div>
                 {loading ? <p className="text-gray-500 text-center py-8">Carregando...</p> : filtradas.length === 0 ? (
@@ -36,7 +36,7 @@ export default function Solicitacoes({ usuario }) {
                                         <p className="text-white font-semibold text-sm">{new Date(sol.data+'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
                                         <p className="text-gray-500 text-xs mt-0.5">{new Date(sol.criado_em).toLocaleDateString('pt-BR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>
                                     </div>
-                                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${sol.status === 'aprovado' ? 'bg-green-500 bg-opacity-20 text-green-400' : sol.status === 'recusado' ? 'bg-red-500 bg-opacity-20 text-red-400' : 'bg-yellow-500 bg-opacity-20 text-yellow-400'}`}>
+                                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${sol.status === 'aprovado' ? 'bg-green-500/20 text-green-400' : sol.status === 'recusado' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
                                         {sol.status === 'aprovado' ? '✓ Aprovado' : sol.status === 'recusado' ? '✗ Recusado' : '⏳ Pendente'}
                                     </span>
                                 </div>

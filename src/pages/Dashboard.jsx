@@ -22,10 +22,15 @@ export default function Dashboard({ usuario, onLogout }) {
     ...(isAdmin ? [{ id: 'escalas', label: 'Escalas' }] : []),
     ...(isAdmin ? [{ id: 'correcoes', label: 'Correções' }] : []),
     { id: 'ponto', label: 'Meu Clockin' },
-    { id: 'relatorio', label: 'Relatório Mensal' },
-    ...(!isAdmin ? [{ id: 'solicitacoes', label: 'Solicitações' }] : []),
-    { id: 'perfil', label: 'Meu Perfil' },
+    ...(isAdmin || usuario.pode_ver_aba_relatorio !== false ? [{ id: 'relatorio', label: 'Relatório Mensal' }] : []),
+    ...(!isAdmin && usuario.pode_ver_aba_solicitacoes !== false ? [{ id: 'solicitacoes', label: 'Solicitações' }] : []),
+    ...(isAdmin || usuario.pode_ver_aba_perfil !== false ? [{ id: 'perfil', label: 'Meu Perfil' }] : []),
   ]
+
+  // Segurança: se a aba atual foi restringida (ou não existe mais na lista), volta pro Meu Clockin.
+  useEffect(() => {
+    if (!abas.find(a => a.id === aba)) setAba('ponto')
+  }, [])
 
   function trocarAba(id) {
     if (id === 'relatorio') setRelatorioKey(k => k + 1)

@@ -37,6 +37,11 @@ export default function AdminAprovacoes({ usuario }) {
     cache_evento: '',
     pode_ver_horas: true,
     pode_ver_resumo: true,
+    pode_solicitar_cache: false,
+    pode_solicitar_dia_trabalhado: false,
+    pode_ver_aba_relatorio: true,
+    pode_ver_aba_solicitacoes: true,
+    pode_ver_aba_perfil: true,
   })
 
   useEffect(() => { carregar(); carregarCargos(); carregarEscalas() }, [])
@@ -87,6 +92,11 @@ export default function AdminAprovacoes({ usuario }) {
       cache_evento: desmascaraMoeda(formAprovar.cache_evento),
       pode_ver_horas: formAprovar.pode_ver_horas,
       pode_ver_resumo: formAprovar.pode_ver_resumo,
+      pode_solicitar_cache: formAprovar.pode_solicitar_cache,
+      pode_solicitar_dia_trabalhado: formAprovar.pode_solicitar_dia_trabalhado,
+      pode_ver_aba_relatorio: formAprovar.pode_ver_aba_relatorio,
+      pode_ver_aba_solicitacoes: formAprovar.pode_ver_aba_solicitacoes,
+      pode_ver_aba_perfil: formAprovar.pode_ver_aba_perfil,
       aprovado_por: usuario.nome,
       aprovado_em: new Date().toISOString()
     }).eq('id', modalAprovar.id)
@@ -98,6 +108,8 @@ export default function AdminAprovacoes({ usuario }) {
         cargo: '', escala_id: '', salario_fixo: '',
         ajuda_custo: '', ajuda_custo_tipo: 'fixo', hora_extra_valor: '', cache_evento: '',
         pode_ver_horas: true, pode_ver_resumo: true,
+        pode_solicitar_cache: false, pode_solicitar_dia_trabalhado: false,
+        pode_ver_aba_relatorio: true, pode_ver_aba_solicitacoes: true, pode_ver_aba_perfil: true,
       })
       carregar()
     }
@@ -262,6 +274,40 @@ export default function AdminAprovacoes({ usuario }) {
                   <label className="flex items-center gap-3 cursor-pointer">
                     <input type="checkbox" checked={formAprovar.pode_ver_resumo} onChange={e => setFormAprovar({...formAprovar, pode_ver_resumo: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
                     <span className="text-gray-300 text-sm">Resumo financeiro do mês (salário, descontos, total)</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="md:col-span-2 border-t border-gray-800 pt-4">
+                <p className="text-gray-400 text-sm font-semibold mb-1">O que esse colaborador pode solicitar sozinho</p>
+                <p className="text-gray-600 text-xs mb-3">Por padrão, só pode solicitar correção de horário.</p>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" checked={formAprovar.pode_solicitar_cache} onChange={e => setFormAprovar({...formAprovar, pode_solicitar_cache: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+                    <span className="text-gray-300 text-sm">Cachê de evento</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" checked={formAprovar.pode_solicitar_dia_trabalhado} onChange={e => setFormAprovar({...formAprovar, pode_solicitar_dia_trabalhado: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+                    <span className="text-gray-300 text-sm">Dia trabalhado (dia extra fora da escala)</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="md:col-span-2 border-t border-gray-800 pt-4">
+                <p className="text-gray-400 text-sm font-semibold mb-1">Quais abas esse colaborador pode acessar</p>
+                <p className="text-gray-600 text-xs mb-3">"Meu Clockin" nunca é escondido. As demais você pode restringir aqui:</p>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" checked={formAprovar.pode_ver_aba_relatorio} onChange={e => setFormAprovar({...formAprovar, pode_ver_aba_relatorio: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+                    <span className="text-gray-300 text-sm">Relatório Mensal</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" checked={formAprovar.pode_ver_aba_solicitacoes} onChange={e => setFormAprovar({...formAprovar, pode_ver_aba_solicitacoes: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+                    <span className="text-gray-300 text-sm">Solicitações</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" checked={formAprovar.pode_ver_aba_perfil} onChange={e => setFormAprovar({...formAprovar, pode_ver_aba_perfil: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+                    <span className="text-gray-300 text-sm">Meu Perfil</span>
                   </label>
                 </div>
               </div>

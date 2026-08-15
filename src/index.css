@@ -11,3 +11,12 @@
 .shake {
   animation: shake 0.4s ease;
 }
+
+/* Corrige campos de data (input type="date") estourando a largura da coluna
+   em telas estreitas — o navegador dá um "min-width" interno que ignora
+   containers flex/grid a menos que a gente force min-width: 0 aqui. */
+input[type="date"],
+input[type="time"] {
+  min-width: 0;
+  max-width: 100%;
+}

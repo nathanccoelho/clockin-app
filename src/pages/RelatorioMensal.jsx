@@ -36,7 +36,7 @@ function numParaMoeda(v) { if (!v) return ''; return Number(v).toLocaleString('p
 
 export default function RelatorioMensal({ usuario }) {
     const hoje = new Date()
-    const isAdmin = usuario.perfil === 'admin'
+    const isAdmin = usuario.perfil === 'admin' || usuario.super_admin
     const [mes, setMes] = useState(hoje.getMonth())
     const [ano, setAno] = useState(hoje.getFullYear())
     const [colaboradores, setColaboradores] = useState([])
@@ -200,6 +200,7 @@ export default function RelatorioMensal({ usuario }) {
         return d <= o
     }
     function horaFmt(iso) { if (!iso) return '--:--'; if (iso.length <= 8) return iso.slice(0, 5); return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }
+    function horaParaInput(iso) { if (!iso) return ''; if (iso.length <= 8) return iso.slice(0, 5); return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }
     function brl(v) { return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
 
     function valorParaTipo(tipo, colab) {
@@ -237,9 +238,12 @@ export default function RelatorioMensal({ usuario }) {
         // Cada uma tem seu próprio interruptor: pagar/descontar em dinheiro, ou deixar
         // no banco de horas (só informativo, some pro saldo acumulado do mês seguinte).
         const horasEsperadasDia = horasEsperadasPara(colab)
+        // Dias marcados como Cachê/Meio Cachê não entram no banco de horas — são pagos à
+        // parte, valor fixo, independente de quantas horas trabalhou naquele dia.
+        const diasComCache = new Set(evsC.filter(e => e.status === 'aprovado' && (e.tipo === 'cache' || e.tipo === 'meio_cache')).map(e => e.data))
         let bancoHorasExtras = 0, bancoHorasFaltantes = 0
         regsC.forEach(r => {
-            if (r.entrada && r.saida && r.horas_trabalhadas != null) {
+            if (r.entrada && r.saida && r.horas_trabalhadas != null && !diasComCache.has(r.data)) {
                 const diff = Number(r.horas_trabalhadas) - horasEsperadasDia
                 if (diff > 0) bancoHorasExtras += diff
                 else bancoHorasFaltantes += Math.abs(diff)
@@ -350,27 +354,72 @@ export default function RelatorioMensal({ usuario }) {
         if (!isAdmin && formEvento.tipo !== 'dia_normal' && !formEvento.valor) return
         setSalvandoEvento(true)
         const colabId = isAdmin ? colaboradorSel?.id : usuario.id
+        const dataStr = modalEvento.data
 
-        // Se não é dia_normal, salva o evento
-        if (formEvento.tipo !== 'dia_normal') {
-            const payload = { colaborador_id: colabId, empresa_id: usuario.empresa_id, data: modalEvento.data, tipo: formEvento.tipo, descricao: formEvento.descricao.trim() || null, valor: desmascaraMoeda(formEvento.valor), status: isAdmin ? 'aprovado' : 'pendente', criado_por: isAdmin ? 'admin' : 'colaborador' }
-            if (modalEvento.eventoExistente) await supabase.from('eventos').update(payload).eq('id', modalEvento.eventoExistente.id)
-            else await supabase.from('eventos').insert(payload)
+        // Admin marcando falta manualmente — grava na tabela de faltas e para por aqui
+        // (não mexe em ponto nem em eventos, e ignora os campos de horário).
+        if (isAdmin && formEvento.tipo === 'falta') {
+            await supabase.from('faltas').upsert({ colaborador_id: colabId, empresa_id: usuario.empresa_id, data: dataStr, status: 'falta' }, { onConflict: 'colaborador_id,data' })
+            setSalvandoEvento(false); setModalEvento(null); carregar(colabId); carregarFechamento()
+            return
         }
 
-        // Se colaborador informou horário (dia_normal ou junto com evento), salva solicitação de ponto
-        if (!isAdmin && (formEvento.entrada || formEvento.saida)) {
+        // Admin corrigindo o horário do dia — aplica direto no registro de ponto,
+        // sem precisar de aprovação (a aprovação é só pra quando quem edita NÃO é admin).
+        if (isAdmin && (formEvento.entrada || formEvento.saida)) {
+            let horasTrabalhadas = null
+            if (formEvento.entrada && formEvento.saida) {
+                const [hE, mE] = formEvento.entrada.split(':').map(Number)
+                const [hS, mS] = formEvento.saida.split(':').map(Number)
+                horasTrabalhadas = ((hS * 60 + mS) - (hE * 60 + mE)) / 60
+                if (horasTrabalhadas < 0) horasTrabalhadas += 24
+            }
+            const entradaISO = formEvento.entrada ? new Date(`${dataStr}T${formEvento.entrada}:00`).toISOString() : null
+            const saidaISO = formEvento.saida ? new Date(`${dataStr}T${formEvento.saida}:00`).toISOString() : null
+            const { data: existente } = await supabase.from('registros_ponto').select('id').eq('colaborador_id', colabId).eq('data', dataStr).maybeSingle()
+            const payloadPonto = { colaborador_id: colabId, empresa_id: usuario.empresa_id, data: dataStr, entrada: entradaISO, saida: saidaISO, horas_trabalhadas: horasTrabalhadas }
+            if (existente) await supabase.from('registros_ponto').update(payloadPonto).eq('id', existente.id)
+            else await supabase.from('registros_ponto').insert(payloadPonto)
+            // Se tinha falta marcada nesse dia, remove — já que agora tem ponto registrado.
+            await supabase.from('faltas').delete().eq('colaborador_id', colabId).eq('data', dataStr).eq('status', 'falta')
+        }
+
+        // Se não é dia_normal/falta, salva o evento — exceto quando é colaborador pedindo
+        // JUNTO com correção de horário (nesse caso, tudo fica dentro da solicitação abaixo,
+        // e o admin cria o evento na hora de aprovar, já com as infos certas).
+        const enviaComoSolicitacao = !isAdmin && (formEvento.entrada || formEvento.saida)
+        let erroEvento = null
+        if (formEvento.tipo !== 'dia_normal' && formEvento.tipo !== 'falta' && !enviaComoSolicitacao) {
+            const payload = { colaborador_id: colabId, empresa_id: usuario.empresa_id, data: dataStr, tipo: formEvento.tipo, descricao: formEvento.descricao.trim() || null, valor: desmascaraMoeda(formEvento.valor), status: isAdmin ? 'aprovado' : 'pendente', criado_por: isAdmin ? 'admin' : 'colaborador' }
+            const { error } = modalEvento.eventoExistente
+                ? await supabase.from('eventos').update(payload).eq('id', modalEvento.eventoExistente.id)
+                : await supabase.from('eventos').insert(payload)
+            if (error) erroEvento = error.message
+        }
+
+        // Colaborador (não-admin) informando horário — vira solicitação, precisa de aprovação do admin.
+        // Guarda o tipo/valor do evento escolhido de forma estruturada, pra tela de aprovação
+        // já vir com tudo certinho, sem o admin ter que reconstruir a partir do texto.
+        let erroSolicitacao = null
+        if (enviaComoSolicitacao) {
             const justificativa = formEvento.tipo === 'dia_normal'
                 ? 'Correção de horário solicitada pelo colaborador'
                 : `Horário informado junto ao evento (${TIPOS_EVENTO.find(t => t.value === formEvento.tipo)?.label || formEvento.tipo})`
-            await supabase.from('solicitacoes_correcao').upsert({
-                colaborador_id: colabId, empresa_id: usuario.empresa_id, data: modalEvento.data,
+            const { error } = await supabase.from('solicitacoes_correcao').upsert({
+                colaborador_id: colabId, empresa_id: usuario.empresa_id, data: dataStr,
                 entrada_solicitada: formEvento.entrada || null, saida_solicitada: formEvento.saida || null,
+                tipo_evento: formEvento.tipo !== 'dia_normal' ? formEvento.tipo : null,
+                descricao_evento: formEvento.descricao.trim() || null,
+                valor_evento: formEvento.tipo !== 'dia_normal' ? desmascaraMoeda(formEvento.valor) : null,
                 justificativa, status: 'pendente'
             }, { onConflict: 'colaborador_id,data' })
+            if (error) erroSolicitacao = error.message
         }
 
-        setSalvandoEvento(false); setModalEvento(null); carregar(colabId); if (isAdmin) carregarFechamento()
+        setSalvandoEvento(false)
+        if (erroEvento) { alert('Erro ao salvar o evento: ' + erroEvento); return }
+        if (erroSolicitacao) { alert('Não foi possível enviar a solicitação: ' + erroSolicitacao + '\n\nAvise o admin — pode ser preciso ajustar uma configuração no banco de dados.'); return }
+        setModalEvento(null); carregar(colabId); if (isAdmin) carregarFechamento()
     }
 
     async function excluirEvento(id) { await supabase.from('eventos').delete().eq('id', id); carregar(colaboradorId); if (isAdmin) { carregarFechamento(); carregarEventosPendentes() } }
@@ -438,11 +487,13 @@ export default function RelatorioMensal({ usuario }) {
     async function enviarSolicitacao() {
         if (!formSol.justificativa.trim()) return
         setEnviandoSol(true)
-        await supabase.from('solicitacoes_correcao').insert({ colaborador_id: usuario.id, empresa_id: usuario.empresa_id, data: modalDia.data, entrada_solicitada: formSol.entrada || null, saida_solicitada: formSol.saida || null, justificativa: formSol.justificativa, status: 'pendente' })
+        const { error } = await supabase.from('solicitacoes_correcao').insert({ colaborador_id: usuario.id, empresa_id: usuario.empresa_id, data: modalDia.data, entrada_solicitada: formSol.entrada || null, saida_solicitada: formSol.saida || null, justificativa: formSol.justificativa, status: 'pendente' })
+        if (error) { setEnviandoSol(false); alert('Erro ao enviar solicitação: ' + error.message); return }
         setSucessoSol(true); setEnviandoSol(false); carregar(usuario.id)
     }
 
     function r2(v) { return Math.round((Number(v) || 0) * 100) / 100 }
+    const FORMATO_MOEDA = '"R$" #,##0.00'
 
     async function exportarXlsx(colabsIds, mesEx, anoEx) {
         setExportando(true)
@@ -502,7 +553,11 @@ export default function RelatorioMensal({ usuario }) {
                 ['Banco', '', '', '', '', colab.banco || ''], ['Agência', '', '', '', '', colab.agencia || ''],
                 ['Conta', '', '', '', '', colab.conta || ''], ['PIX', '', '', '', '', colab.pix || ''],
             ]
-            fin.forEach((row, i) => { row.forEach((val, j) => { const cell = XLSX.utils.encode_cell({ r: linhaBase + i, c: j }); ws[cell] = { v: val, t: typeof val === 'number' ? 'n' : 's' } }) })
+            fin.forEach((row, i) => { row.forEach((val, j) => {
+                const cell = XLSX.utils.encode_cell({ r: linhaBase + i, c: j })
+                ws[cell] = { v: val, t: typeof val === 'number' ? 'n' : 's' }
+                if (typeof val === 'number' && (j === 4 || j === 5)) ws[cell].z = FORMATO_MOEDA
+            }) })
             const ref = XLSX.utils.decode_range(ws['!ref'] || `A1:I${diasMes + 1}`)
             ref.e.r = Math.max(ref.e.r, linhaBase + fin.length); ref.e.c = Math.max(ref.e.c, 5)
             ws['!ref'] = XLSX.utils.encode_range(ref)
@@ -520,6 +575,13 @@ export default function RelatorioMensal({ usuario }) {
                 rowsGeral.push([c.nome, c.cargo || '', `${c.banco || ''} Ag:${c.agencia || ''} Cc:${c.conta || ''}`, c.pix || '', calc.dias, Number(calc.horas.toFixed(1)), r2(calc.salario), r2(calc.ajuda), r2(calc.cache + calc.mCache + calc.diaTrab + calc.ferTrab + calc.fer + calc.dec + calc.bonus + calc.moradia), r2(calc.hExtra), r2(-calc.descontoFalta), r2(-(calc.descontoAjudaFalta + calc.descontoHorasMenos + calc.adiant + calc.desc)), r2(calc.total)])
             })
             const wsGeral = XLSX.utils.aoa_to_sheet(rowsGeral)
+            const colunasMoedaGeral = [6, 7, 8, 9, 10, 11, 12]
+            for (let r = 1; r < rowsGeral.length; r++) {
+                colunasMoedaGeral.forEach(c => {
+                    const cell = XLSX.utils.encode_cell({ r, c })
+                    if (wsGeral[cell]) wsGeral[cell].z = FORMATO_MOEDA
+                })
+            }
             wsGeral['!cols'] = [{ wch: 22 }, { wch: 18 }, { wch: 28 }, { wch: 20 }, { wch: 6 }, { wch: 7 }, { wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 14 }]
             XLSX.utils.book_append_sheet(wb, wsGeral, 'Geral')
         }
@@ -530,11 +592,13 @@ export default function RelatorioMensal({ usuario }) {
     function clicarDia(dia) {
         const dataStr = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
         const ev = getEvento(dia); const falta = getFalta(dia, faltas)
+        const reg = registros.find(r => r.data === dataStr)
+        const horaEntradaAtual = horaParaInput(reg?.entrada)
+        const horaSaidaAtual = horaParaInput(reg?.saida)
         const colab = isAdmin ? colaboradorSel : (colaboradores.find(c => c.id === usuario.id) || usuario)
         if (isAdmin && falta) { setModalAbono({ falta }); setJustAbono(falta.justificativa || ''); setAbaAbono('abonar'); setFormPontoFalta({ entrada: '', saida: '' }); setFormEventoFalta({ tipo: 'cache', descricao: '', valor: valorParaTipo('cache', colaboradorSel) }); return }
-        const tipoInicial = isAdmin ? 'cache' : 'dia_normal'
-        if (isAdmin) { setFormEvento({ tipo: ev?.tipo || 'cache', descricao: ev?.descricao || '', valor: ev?.valor ? numParaMoeda(ev.valor) : valorParaTipo('cache', colab), entrada: '', saida: '' }); setModalEvento({ dia, data: dataStr, eventoExistente: ev || null }) }
-        else { if (ev) { setFormEvento({ tipo: ev.tipo, descricao: ev.descricao || '', valor: numParaMoeda(ev.valor), entrada: '', saida: '' }); setModalEvento({ dia, data: dataStr, eventoExistente: ev }) } else { setFormEvento({ tipo: tipoInicial, descricao: '', valor: '', entrada: '', saida: '' }); setModalEvento({ dia, data: dataStr, eventoExistente: null }) } }
+        if (isAdmin) { setFormEvento({ tipo: ev?.tipo || 'dia_normal', descricao: ev?.descricao || '', valor: ev?.valor ? numParaMoeda(ev.valor) : '', entrada: horaEntradaAtual, saida: horaSaidaAtual }); setModalEvento({ dia, data: dataStr, eventoExistente: ev || null }) }
+        else { if (ev) { setFormEvento({ tipo: ev.tipo, descricao: ev.descricao || '', valor: numParaMoeda(ev.valor), entrada: horaEntradaAtual, saida: horaSaidaAtual }); setModalEvento({ dia, data: dataStr, eventoExistente: ev }) } else { setFormEvento({ tipo: 'dia_normal', descricao: '', valor: '', entrada: horaEntradaAtual, saida: horaSaidaAtual }); setModalEvento({ dia, data: dataStr, eventoExistente: null }) } }
     }
 
     function mudarTipoEvento(tipo) { const colab = isAdmin ? colaboradorSel : usuario; setFormEvento(f => ({ ...f, tipo, valor: valorParaTipo(tipo, colab) })) }
@@ -734,8 +798,8 @@ export default function RelatorioMensal({ usuario }) {
                                         {falta?.status === 'abonada' && <p className="text-white text-[8px]">abonada</p>}
                                         {!falta && ev?.status === 'aprovado' && <p className="text-[8px] leading-tight truncate text-white">{ev.descricao || TIPOS_EVENTO.find(t => t.value === ev.tipo)?.label}</p>}
                                         {!falta && ev?.status === 'pendente' && <p className="text-yellow-400 text-[8px]">pend.</p>}
-                                        {!ev && !falta && reg?.entrada && <p className="text-white text-[9px] leading-tight">{horaFmt(reg.entrada)}</p>}
-                                        {!ev && !falta && reg?.saida && <p className="text-white text-[9px] leading-tight">{horaFmt(reg.saida)}</p>}
+                                        {!falta && reg?.entrada && <p className="text-white text-[9px] leading-tight">{horaFmt(reg.entrada)}</p>}
+                                        {!falta && reg?.saida && <p className="text-white text-[9px] leading-tight">{horaFmt(reg.saida)}</p>}
                                         {sol && <div className={`absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full ${sol.status === 'aprovado' ? 'bg-green-400' : sol.status === 'recusado' ? 'bg-red-400' : 'bg-yellow-400'}`} />}
                                     </div>
                                 )
@@ -1114,41 +1178,53 @@ export default function RelatorioMensal({ usuario }) {
                                     </div>
                                 </div>
 
-                                {/* Evento extra — opcional */}
-                                <div>
-                                    <p className="text-white text-xs font-semibold mb-2">📋 Lançar evento extra <span className="text-gray-500 font-normal">(opcional)</span></p>
-                                    <div className="grid grid-cols-2 gap-2 mb-3">
-                                        {/* Dia Trabalhado e Feriado — todos podem */}
-                                        {[
-                                            { value: 'dia_normal', label: 'Dia Normal' },
-                                            ...(Number(usuario.cache_evento) > 0 ? [{ value: 'cache', label: 'Cachê' }, { value: 'meio_cache', label: 'Meio Cachê' }] : []),
-                                            { value: 'dia_trabalhado', label: 'Dia Trabalhado' },
-                                            { value: 'feriado_trabalhado', label: 'Feriado Trabalhado' },
-                                        ].map(t => (
-                                            <button key={t.value} type="button" onClick={() => setFormEvento(f => ({ ...f, tipo: t.value, valor: t.value === 'dia_normal' ? '' : valorParaTipo(t.value, usuario) }))}
-                                                className={`py-2 px-3 rounded-xl text-xs font-semibold cursor-pointer transition-colors border w-auto ${formEvento.tipo === t.value ? 'bg-green-500 text-white border-green-500' : 'bg-gray-800 text-gray-300 border-gray-700 hover:border-green-500'}`}>
-                                                {t.label}
-                                            </button>
-                                        ))}
-                                    </div>
+                                {/* Evento extra — opcional. Colaborador comum só vê isso se tiver cachê configurado
+                                    (a maioria não tem, então só sobra "corrigir horário" pra eles). Dia Trabalhado e
+                                    Feriado Trabalhado são decisão do admin, não algo que o colaborador solicita sozinho. */}
+                                {(() => {
+                                    const colabAlvo = isAdmin ? colaboradorSel : usuario
+                                    const podeCache = isAdmin || colabAlvo?.pode_solicitar_cache
+                                    const podeDiaTrabalhado = isAdmin || colabAlvo?.pode_solicitar_dia_trabalhado
+                                    if (!isAdmin && !podeCache && !podeDiaTrabalhado) return null
+                                    return (
+                                        <div>
+                                            <p className="text-white text-xs font-semibold mb-2">📋 Lançar evento extra <span className="text-gray-500 font-normal">(opcional)</span></p>
+                                            <div className="grid grid-cols-2 gap-2 mb-3">
+                                                {[
+                                                    { value: 'dia_normal', label: 'Dia Normal' },
+                                                    ...(podeCache ? [{ value: 'cache', label: 'Cachê' }, { value: 'meio_cache', label: 'Meio Cachê' }] : []),
+                                                    ...(podeDiaTrabalhado ? [{ value: 'dia_trabalhado', label: 'Dia Trabalhado' }] : []),
+                                                    ...(isAdmin ? [{ value: 'feriado_trabalhado', label: 'Feriado Trabalhado' }] : []),
+                                                    ...(isAdmin ? [{ value: 'falta', label: '🚫 Falta' }] : []),
+                                                ].map(t => (
+                                                    <button key={t.value} type="button" onClick={() => setFormEvento(f => ({ ...f, tipo: t.value, valor: (t.value === 'dia_normal' || t.value === 'falta') ? '' : valorParaTipo(t.value, colabAlvo) }))}
+                                                        className={`py-2 px-3 rounded-xl text-xs font-semibold cursor-pointer transition-colors border w-auto ${formEvento.tipo === t.value ? (t.value === 'falta' ? 'bg-red-500 text-white border-red-500' : 'bg-green-500 text-white border-green-500') : 'bg-gray-800 text-gray-300 border-gray-700 hover:border-green-500'}`}>
+                                                        {t.label}
+                                                    </button>
+                                                ))}
+                                            </div>
 
-                                    {formEvento.tipo !== 'dia_normal' && (
-                                        <>
-                                            <div className="mb-3"><label className="text-gray-400 text-xs mb-1 block">Descrição / Nome do evento</label><input value={formEvento.descricao} onChange={e => setFormEvento(f => ({ ...f, descricao: e.target.value }))} placeholder="Ex: Léo Santana, Good Times..." className={inputCls + ' placeholder-gray-600'} /></div>
-                                            <div><label className="text-gray-400 text-xs mb-1 block">Valor</label><input type="text" value={formEvento.valor} onChange={e => { const num = e.target.value.replace(/\D/g, ''); setFormEvento(f => ({ ...f, valor: num ? (Number(num) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '' })) }} placeholder="R$ 0,00" className={inputCls} /></div>
-                                        </>
-                                    )}
+                                            {formEvento.tipo !== 'dia_normal' && formEvento.tipo !== 'falta' && (
+                                                <>
+                                                    <div className="mb-3"><label className="text-gray-400 text-xs mb-1 block">Descrição / Nome do evento</label><input value={formEvento.descricao} onChange={e => setFormEvento(f => ({ ...f, descricao: e.target.value }))} placeholder="Ex: Léo Santana, Good Times..." className={inputCls + ' placeholder-gray-600'} /></div>
+                                                    <div><label className="text-gray-400 text-xs mb-1 block">Valor</label><input type="text" value={formEvento.valor} onChange={e => { const num = e.target.value.replace(/\D/g, ''); setFormEvento(f => ({ ...f, valor: num ? (Number(num) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '' })) }} placeholder="R$ 0,00" className={inputCls} /></div>
+                                                </>
+                                            )}
 
-                                    {formEvento.tipo === 'dia_normal' && <p className="text-gray-600 text-[10px]">Dia normal — apenas corrige o ponto. Horas extras serão calculadas automaticamente se houver.</p>}
-                                </div>
+                                            {formEvento.tipo === 'dia_normal' && <p className="text-gray-600 text-[10px]">Dia normal — apenas corrige o ponto. Horas extras serão calculadas automaticamente se houver.</p>}
+                                            {formEvento.tipo === 'falta' && <p className="text-red-400 text-[10px]">⚠ Marca esse dia como falta (desconta salário proporcional, se não for abonada depois). Ignora os campos de horário acima.</p>}
+                                        </div>
+                                    )
+                                })()}
 
-                                <p className="text-yellow-400 text-xs">⚠ Será enviado para aprovação do admin.</p>
+                                {!isAdmin && <p className="text-yellow-400 text-xs">⚠ Será enviado para aprovação do admin.</p>}
+                                {isAdmin && (formEvento.entrada || formEvento.saida) && <p className="text-green-400 text-xs">✓ Como admin, isso corrige o ponto na hora — sem precisar de aprovação.</p>}
                             </div>
                         )}
                         <div className="flex gap-3 mt-5">
                             {modalEvento.eventoExistente && <button onClick={() => { excluirEvento(modalEvento.eventoExistente.id); setModalEvento(null) }} className="bg-red-500/20 text-red-400 font-bold py-3 px-4 rounded-2xl cursor-pointer hover:bg-red-500/30 transition-colors border-0 shadow-none w-auto">Excluir</button>}
                             <button onClick={() => setModalEvento(null)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl cursor-pointer hover:bg-gray-700 transition-colors">{(!isAdmin && modalEvento.eventoExistente?.status === 'aprovado') ? 'Fechar' : 'Cancelar'}</button>
-                            {(!modalEvento.eventoExistente || modalEvento.eventoExistente?.status !== 'aprovado' || isAdmin) && <button onClick={salvarEvento} disabled={salvandoEvento || (isAdmin && !formEvento.valor) || (!isAdmin && formEvento.tipo !== 'dia_normal' && !formEvento.valor) || (!isAdmin && formEvento.tipo === 'dia_normal' && !formEvento.entrada && !formEvento.saida)} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{salvandoEvento ? 'Salvando...' : isAdmin ? 'Salvar' : 'Solicitar'}</button>}
+                            {(!modalEvento.eventoExistente || modalEvento.eventoExistente?.status !== 'aprovado' || isAdmin) && <button onClick={salvarEvento} disabled={salvandoEvento || (isAdmin && formEvento.tipo !== 'dia_normal' && formEvento.tipo !== 'falta' && !formEvento.valor) || (isAdmin && formEvento.tipo === 'dia_normal' && !formEvento.entrada && !formEvento.saida && !modalEvento.eventoExistente) || (!isAdmin && formEvento.tipo !== 'dia_normal' && !formEvento.valor) || (!isAdmin && formEvento.tipo === 'dia_normal' && !formEvento.entrada && !formEvento.saida)} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl cursor-pointer hover:bg-green-600 disabled:opacity-40 transition-colors">{salvandoEvento ? 'Salvando...' : isAdmin ? 'Salvar' : 'Solicitar'}</button>}
                         </div>
                     </div>
                 </div>

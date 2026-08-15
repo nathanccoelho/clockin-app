@@ -19,7 +19,7 @@ const ESCALAS = [
 ]
 
 export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) {
-  const isAdmin = usuario.perfil === 'admin'
+  const isAdmin = usuario.perfil === 'admin' || usuario.super_admin
   const idAlvo = colaboradorId || usuario.id
 
   const [colab, setColab] = useState(null)
@@ -38,6 +38,8 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
     cargo: '', escala: '5x2', data_admissao: '',
     salario_fixo: '', ajuda_custo: '', ajuda_custo_tipo: 'fixo', hora_extra_valor: '', cache_evento: '',
     pode_ver_horas: true, pode_ver_resumo: true,
+    pode_solicitar_cache: false, pode_solicitar_dia_trabalhado: false,
+    pode_ver_aba_relatorio: true, pode_ver_aba_solicitacoes: true, pode_ver_aba_perfil: true,
     pix: '', banco: '', agencia: '', conta: '',
   })
 
@@ -66,6 +68,11 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
         cache_evento: data.cache_evento ? mascaraMoeda(String(Math.round(data.cache_evento * 100))) : '',
         pode_ver_horas: data.pode_ver_horas !== false,
         pode_ver_resumo: data.pode_ver_resumo !== false,
+        pode_solicitar_cache: data.pode_solicitar_cache || false,
+        pode_solicitar_dia_trabalhado: data.pode_solicitar_dia_trabalhado || false,
+        pode_ver_aba_relatorio: data.pode_ver_aba_relatorio !== false,
+        pode_ver_aba_solicitacoes: data.pode_ver_aba_solicitacoes !== false,
+        pode_ver_aba_perfil: data.pode_ver_aba_perfil !== false,
         pix: data.pix || '',
         banco: data.banco || '',
         agencia: data.agencia || '',
@@ -151,6 +158,11 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
       cache_evento: desmascaraMoeda(form.cache_evento),
       pode_ver_horas: form.pode_ver_horas,
       pode_ver_resumo: form.pode_ver_resumo,
+      pode_solicitar_cache: form.pode_solicitar_cache,
+      pode_solicitar_dia_trabalhado: form.pode_solicitar_dia_trabalhado,
+      pode_ver_aba_relatorio: form.pode_ver_aba_relatorio,
+      pode_ver_aba_solicitacoes: form.pode_ver_aba_solicitacoes,
+      pode_ver_aba_perfil: form.pode_ver_aba_perfil,
     }).eq('id', idAlvo)
 
     setMsgProfissional(error ? 'Erro ao salvar.' : 'Dados profissionais salvos!')
@@ -247,12 +259,6 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
             <label className="block text-gray-400 text-sm mb-1">Data de Nascimento</label>
             <input type="date" className={inputCls + ' cursor-pointer'} value={form.data_nascimento} onChange={e => setForm({...form, data_nascimento: e.target.value})} />
           </div>
-          <div>
-            <label className="block text-gray-400 text-sm mb-1">Data de Admissão</label>
-            {isAdmin
-              ? <input type="date" className={inputCls + ' cursor-pointer'} value={form.data_admissao} onChange={e => setForm({...form, data_admissao: e.target.value})} />
-              : <input className={inputReadOnly} value={colab.data_admissao ? new Date(colab.data_admissao + 'T00:00:00').toLocaleDateString('pt-BR') : '—'} readOnly />}
-          </div>
         </div>
         {msg && <p className={`text-sm font-semibold ${msgTipo === 'ok' ? 'text-green-400' : 'text-red-400'}`}>{msg}</p>}
         <button type="submit" disabled={salvando}
@@ -265,6 +271,12 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
       <form onSubmit={isAdmin ? salvarProfissional : e => e.preventDefault()} className="bg-gray-900 rounded-2xl p-6 border border-gray-800 space-y-4">
         <h3 className="text-white font-bold">Dados Profissionais</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-gray-400 text-sm mb-1">Data de Admissão</label>
+            {isAdmin
+              ? <input type="date" className={inputCls + ' cursor-pointer'} value={form.data_admissao} onChange={e => setForm({...form, data_admissao: e.target.value})} />
+              : <input className={inputReadOnly} value={colab.data_admissao ? new Date(colab.data_admissao + 'T00:00:00').toLocaleDateString('pt-BR') : '—'} readOnly />}
+          </div>
           <div>
             <label className="block text-gray-400 text-sm mb-1">Cargo</label>
             {isAdmin
@@ -337,6 +349,38 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
             <label className="flex items-center gap-3 cursor-pointer">
               <input type="checkbox" checked={form.pode_ver_resumo} onChange={e => setForm({...form, pode_ver_resumo: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
               <span className="text-gray-300 text-sm">Resumo financeiro do mês (salário, descontos, total)</span>
+            </label>
+          </div>
+        )}
+        {isAdmin && (
+          <div className="border-t border-gray-800 pt-4 space-y-3">
+            <p className="text-gray-400 text-sm font-semibold">O que esse colaborador pode solicitar sozinho (sem passar pelo admin)</p>
+            <p className="text-gray-600 text-xs -mt-2">Por padrão, colaboradores só podem solicitar correção de horário. Marque aqui se ele também pode solicitar:</p>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" checked={form.pode_solicitar_cache} onChange={e => setForm({...form, pode_solicitar_cache: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+              <span className="text-gray-300 text-sm">Cachê de evento</span>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" checked={form.pode_solicitar_dia_trabalhado} onChange={e => setForm({...form, pode_solicitar_dia_trabalhado: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+              <span className="text-gray-300 text-sm">Dia trabalhado (dia extra fora da escala normal)</span>
+            </label>
+          </div>
+        )}
+        {isAdmin && (
+          <div className="border-t border-gray-800 pt-4 space-y-3">
+            <p className="text-gray-400 text-sm font-semibold">Quais abas esse colaborador pode acessar</p>
+            <p className="text-gray-600 text-xs -mt-2">"Meu Clockin" (bater ponto) nunca é escondido. As demais você pode restringir aqui:</p>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" checked={form.pode_ver_aba_relatorio} onChange={e => setForm({...form, pode_ver_aba_relatorio: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+              <span className="text-gray-300 text-sm">Relatório Mensal</span>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" checked={form.pode_ver_aba_solicitacoes} onChange={e => setForm({...form, pode_ver_aba_solicitacoes: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+              <span className="text-gray-300 text-sm">Solicitações</span>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" checked={form.pode_ver_aba_perfil} onChange={e => setForm({...form, pode_ver_aba_perfil: e.target.checked})} className="w-4 h-4 cursor-pointer accent-green-500" />
+              <span className="text-gray-300 text-sm">Meu Perfil</span>
             </label>
           </div>
         )}

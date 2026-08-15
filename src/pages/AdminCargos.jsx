@@ -84,7 +84,7 @@ export default function AdminCargos({ usuario }) {
 
       {/* Modal Editar */}
       {modalEditar && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-sm p-6">
             <h3 className="text-white text-lg font-bold mb-4">Editar Cargo</h3>
             <input className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 mb-4 focus:border-green-500 focus:outline-none cursor-text"
@@ -105,7 +105,7 @@ export default function AdminCargos({ usuario }) {
 
       {/* Modal Excluir */}
       {modalExcluir && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-sm p-6">
             <h3 className="text-white text-lg font-bold mb-2">Excluir Cargo</h3>
             <p className="text-gray-400 mb-6">Tem certeza que deseja excluir <strong className="text-white">{modalExcluir.nome}</strong>?</p>
