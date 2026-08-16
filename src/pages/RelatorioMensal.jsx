@@ -752,9 +752,10 @@ export default function RelatorioMensal({ usuario }) {
                         const colabParaBanco = isAdmin ? colaboradorSel : usuario
                         if (!colabParaBanco) return null
                         const horasEsperadasDia = horasEsperadasPara(colabParaBanco)
+                        const diasComCache = new Set(eventos.filter(e => e.status === 'aprovado' && (e.tipo === 'cache' || e.tipo === 'meio_cache')).map(e => e.data))
                         let extras = 0, faltantes = 0
                         registros.forEach(r => {
-                            if (r.entrada && r.saida && r.horas_trabalhadas != null) {
+                            if (r.entrada && r.saida && r.horas_trabalhadas != null && !diasComCache.has(r.data)) {
                                 const diff = Number(r.horas_trabalhadas) - horasEsperadasDia
                                 if (diff > 0) extras += diff; else faltantes += Math.abs(diff)
                             }
@@ -800,6 +801,18 @@ export default function RelatorioMensal({ usuario }) {
                                         {!falta && ev?.status === 'pendente' && <p className="text-yellow-400 text-[8px]">pend.</p>}
                                         {!falta && reg?.entrada && <p className="text-white text-[9px] leading-tight">{horaFmt(reg.entrada)}</p>}
                                         {!falta && reg?.saida && <p className="text-white text-[9px] leading-tight">{horaFmt(reg.saida)}</p>}
+                                        {!falta && reg?.entrada && reg?.saida && reg.horas_trabalhadas != null && (() => {
+                                            const colabAlvo = isAdmin ? colaboradorSel : usuario
+                                            if (!colabAlvo) return null
+                                            const ehDiaCache = ev?.status === 'aprovado' && (ev.tipo === 'cache' || ev.tipo === 'meio_cache')
+                                            if (ehDiaCache) return null
+                                            const diff = Number(reg.horas_trabalhadas) - horasEsperadasPara(colabAlvo)
+                                            if (Math.abs(diff) < (1 / 60)) return null
+                                            const h = Math.floor(Math.abs(diff))
+                                            const m = Math.round((Math.abs(diff) - h) * 60)
+                                            const texto = `${diff > 0 ? '+' : '-'}${h > 0 ? `${h}h` : ''}${m > 0 ? `${h > 0 ? ' ' : ''}${m}min` : (h === 0 ? '0min' : '')}`
+                                            return <p className={`text-[8px] leading-tight font-bold ${diff > 0 ? 'text-green-400' : 'text-red-400'}`}>{texto}</p>
+                                        })()}
                                         {sol && <div className={`absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full ${sol.status === 'aprovado' ? 'bg-green-400' : sol.status === 'recusado' ? 'bg-red-400' : 'bg-yellow-400'}`} />}
                                     </div>
                                 )
@@ -1100,7 +1113,7 @@ export default function RelatorioMensal({ usuario }) {
             {/* Modal falta */}
             {modalAbono && (
                 <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-                    <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
+                    <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700 max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between mb-4">
                             <div><h3 className="text-white text-lg font-bold">Resolver falta</h3><p className="text-gray-400 text-sm">{new Date(modalAbono.falta.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p></div>
                             <button onClick={() => setModalAbono(null)} className="text-gray-400 hover:text-white cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none text-2xl">✕</button>
@@ -1155,7 +1168,7 @@ export default function RelatorioMensal({ usuario }) {
             {/* Modal evento */}
             {modalEvento && (
                 <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-                    <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700">
+                    <div className="bg-gray-900 rounded-3xl p-6 w-full max-w-sm border border-gray-700 max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between mb-4">
                             <div><h3 className="text-white text-lg font-bold">{modalEvento.eventoExistente ? 'Editar evento' : 'Lançar evento'}</h3><p className="text-gray-400 text-sm">{new Date(modalEvento.data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p></div>
                             <button onClick={() => setModalEvento(null)} className="text-gray-400 hover:text-white cursor-pointer w-auto p-0 bg-transparent border-0 shadow-none text-2xl">✕</button>
