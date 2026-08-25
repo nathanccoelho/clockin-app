@@ -57,10 +57,15 @@ export default function BaterPonto({ usuario }) {
     }
 
     function verificarLocalizacao() {
-        if (!navigator.geolocation) { setErroLoc('Geolocalização não suportada.'); return }
+        setErroLoc(''); setDistancia(null)
+        if (!navigator.geolocation) { setErroLoc('Geolocalização não suportada nesse navegador.'); return }
         navigator.geolocation.getCurrentPosition(
             pos => { const dist = distanciaMetros(pos.coords.latitude, pos.coords.longitude, VARANDA_LAT, VARANDA_LNG); setDistancia(Math.round(dist)) },
-            () => setErroLoc('Não foi possível obter sua localização. Permita o acesso.'),
+            (err) => {
+                if (err.code === 1) setErroLoc('PERMISSAO_NEGADA')
+                else if (err.code === 3) setErroLoc('Tempo esgotado tentando obter sua localização. Tente novamente.')
+                else setErroLoc('Não foi possível obter sua localização. Tente novamente.')
+            },
             { enableHighAccuracy: true, timeout: 10000 }
         )
     }
@@ -212,9 +217,29 @@ export default function BaterPonto({ usuario }) {
                     <div className="bg-gray-800 rounded-xl p-4 text-center"><p className="text-gray-400 text-xs mb-1">Entrada</p><p className={`text-2xl font-bold ${temEntrada ? 'text-green-400' : 'text-gray-600'}`}>{horaFormatada(registroHoje?.entrada)}</p></div>
                     <div className="bg-gray-800 rounded-xl p-4 text-center"><p className="text-gray-400 text-xs mb-1">Saída</p><p className={`text-2xl font-bold ${temSaida ? 'text-red-400' : 'text-gray-600'}`}>{horaFormatada(registroHoje?.saida)}</p></div>
                 </div>
-                <div className={`rounded-xl p-3 mb-4 flex items-center gap-3 ${erroLoc ? 'bg-red-500/10 border border-red-500/30' : distancia === null ? 'bg-gray-800' : dentroDoRaio ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
-                    <span className="text-xl">📍</span>
-                    <div>{erroLoc ? <p className="text-red-400 text-sm">{erroLoc}</p> : distancia === null ? <p className="text-gray-400 text-sm">Verificando localização...</p> : DESATIVAR_VALIDACAO_LOCALIZACAO_TESTE ? <p className="text-yellow-400 text-sm font-semibold">⚠️ Localização real: {distancia}m (ignorada — modo teste)</p> : dentroDoRaio ? <p className="text-white text-sm font-semibold">✅ Você está no local ({distancia}m)</p> : <p className="text-red-400 text-sm font-semibold">❌ Fora do raio permitido ({distancia}m de {RAIO_METROS}m)</p>}</div>
+                <div className={`rounded-xl p-3 mb-4 ${erroLoc ? 'bg-red-500/10 border border-red-500/30' : distancia === null ? 'bg-gray-800' : dentroDoRaio ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
+                    <div className="flex items-center gap-3">
+                        <span className="text-xl">📍</span>
+                        <div className="flex-1">
+                            {erroLoc === 'PERMISSAO_NEGADA' ? (
+                                <>
+                                    <p className="text-red-400 text-sm font-semibold">❌ Permissão de localização bloqueada</p>
+                                    <p className="text-gray-400 text-xs mt-1">Clica no ícone de cadeado/informações ao lado do endereço no navegador, permite "Localização" pra esse site, e depois clica em "Pedir localização de novo".</p>
+                                </>
+                            ) : erroLoc ? (
+                                <p className="text-red-400 text-sm">{erroLoc}</p>
+                            ) : distancia === null ? (
+                                <p className="text-gray-400 text-sm">Verificando localização...</p>
+                            ) : DESATIVAR_VALIDACAO_LOCALIZACAO_TESTE ? (
+                                <p className="text-yellow-400 text-sm font-semibold">⚠️ Localização real: {distancia}m (ignorada — modo teste)</p>
+                            ) : dentroDoRaio ? (
+                                <p className="text-white text-sm font-semibold">✅ Você está no local ({distancia}m)</p>
+                            ) : (
+                                <p className="text-red-400 text-sm font-semibold">❌ Fora do raio permitido ({distancia}m de {RAIO_METROS}m)</p>
+                            )}
+                        </div>
+                    </div>
+                    <button onClick={verificarLocalizacao} className="mt-2 w-full bg-gray-800 text-gray-300 font-semibold py-2 rounded-lg text-sm hover:bg-gray-700 cursor-pointer transition-colors">🔄 Pedir localização de novo</button>
                 </div>
                 {loading ? <p className="text-gray-500 text-center">Carregando...</p> : temSaida ? (
                     <div className="bg-gray-800 rounded-xl p-4 text-center"><p className="text-gray-400">Clockin do dia finalizado</p><p className="text-white font-bold mt-1">{Number(registroHoje?.horas_trabalhadas || 0).toFixed(1)}h trabalhadas</p></div>
