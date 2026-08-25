@@ -14,6 +14,12 @@ function distanciaMetros(lat1, lon1, lat2, lon2) {
     const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2
     return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
 }
+function detectarPlataforma() {
+    const ua = navigator.userAgent || ''
+    if (/iPhone|iPad|iPod/.test(ua)) return 'ios'
+    if (/Android/.test(ua)) return 'android'
+    return 'desktop'
+}
 function calcularBrilho(video) {
     const canvas = document.createElement('canvas'); canvas.width = 64; canvas.height = 64
     const ctx = canvas.getContext('2d'); ctx.drawImage(video, 0, 0, 64, 64)
@@ -224,7 +230,17 @@ export default function BaterPonto({ usuario }) {
                             {erroLoc === 'PERMISSAO_NEGADA' ? (
                                 <>
                                     <p className="text-red-400 text-sm font-semibold">❌ Permissão de localização bloqueada</p>
-                                    <p className="text-gray-400 text-xs mt-1">Clica no ícone de cadeado/informações ao lado do endereço no navegador, permite "Localização" pra esse site, e depois clica em "Pedir localização de novo".</p>
+                                    {detectarPlataforma() === 'ios' ? (
+                                        <p className="text-gray-400 text-xs mt-1">
+                                            No iPhone: abre o app <strong className="text-gray-300">Ajustes</strong> → <strong className="text-gray-300">Privacidade e Segurança</strong> → <strong className="text-gray-300">Serviços de Localização</strong> → <strong className="text-gray-300">Safari (Sites)</strong> → escolhe <strong className="text-gray-300">"Perguntar"</strong> ou <strong className="text-gray-300">"Permitir"</strong>. Volta aqui e clica em "Pedir localização de novo".
+                                        </p>
+                                    ) : detectarPlataforma() === 'android' ? (
+                                        <p className="text-gray-400 text-xs mt-1">
+                                            No Android: toca no ícone de <strong className="text-gray-300">cadeado ou "ⓘ"</strong> ao lado do endereço, em <strong className="text-gray-300">Permissões</strong> ativa a <strong className="text-gray-300">Localização</strong>, e depois clica em "Pedir localização de novo".
+                                        </p>
+                                    ) : (
+                                        <p className="text-gray-400 text-xs mt-1">Clica no ícone de cadeado/informações ao lado do endereço no navegador, permite "Localização" pra esse site, e depois clica em "Pedir localização de novo".</p>
+                                    )}
                                 </>
                             ) : erroLoc ? (
                                 <p className="text-red-400 text-sm">{erroLoc}</p>
