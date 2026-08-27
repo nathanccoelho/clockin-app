@@ -16,19 +16,19 @@ function calcularAbertura(pontos) {
     return (v1+v2)/(2*h)
 }
 
-const ESCALAS = [
-    { value: '5x2', label: '5x2 — Seg a Sex' },
-    { value: '6x1_sabados', label: '6x1 — Seg a Sex + 2 sábados fixos/mês' },
-    { value: '5x2_sabados_variaveis', label: '5x2 + sábados variáveis' },
-    { value: 'livre', label: 'Livre — Escala variável' },
-]
+const DIAS_SEMANA_LABEL = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+function resumoDias(dias) {
+    if (!dias?.length) return ''
+    return [...dias].sort().map(d => DIAS_SEMANA_LABEL[d]).join(', ')
+}
 
 export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' }) {
     const [colaboradores, setColaboradores] = useState([])
     const [cargos, setCargos] = useState([])
     const [loading, setLoading] = useState(true)
     const [modalCadastro, setModalCadastro] = useState(false)
-    const [form, setForm] = useState({ nome: '', cpf: '', email: '', telefone: '', cargo: '', escala: '5x2', salario_fixo: '', ajuda_custo: '', ajuda_custo_tipo: 'fixo', hora_extra_valor: '', cache_evento: '' })
+    const [form, setForm] = useState({ nome: '', cpf: '', email: '', telefone: '', cargo: '', escala_id: '', salario_fixo: '', ajuda_custo: '', ajuda_custo_tipo: 'fixo', hora_extra_valor: '', cache_evento: '' })
+    const [escalas, setEscalas] = useState([])
     const [salvando, setSalvando] = useState(false)
     const [msg, setMsg] = useState('')
     const [modalFacial, setModalFacial] = useState(null)
@@ -48,7 +48,7 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
     const [confirmacaoTexto, setConfirmacaoTexto] = useState('')
     const videoRef = useRef(null), streamRef = useRef(null), loopRef = useRef(false), capturedRef = useRef(false)
 
-    useEffect(() => { carregar(); carregarCargos() }, [modo])
+    useEffect(() => { carregar(); carregarCargos(); carregarEscalas() }, [modo])
 
     async function carregar() {
         setLoading(true)
@@ -61,22 +61,29 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
         setCargos(data || [])
     }
 
+    async function carregarEscalas() {
+        const { data } = await supabase.from('escalas').select('*').eq('empresa_id', usuario.empresa_id).order('nome')
+        setEscalas(data || [])
+    }
+
     function calcularHoraExtra(salarioStr) {
         const sal = desmascaraMoeda(salarioStr); if (!sal) return ''
         return mascaraMoeda(String(Math.round((sal/30/9*1.5)*100)))
     }
 
-    function abrirModalCadastro() { setForm({ nome: '', cpf: '', email: '', telefone: '', cargo: '', escala: '5x2', salario_fixo: '', ajuda_custo: '', ajuda_custo_tipo: 'fixo', hora_extra_valor: '', cache_evento: '' }); setMsg(''); setModalCadastro(true) }
+    function abrirModalCadastro() { setForm({ nome: '', cpf: '', email: '', telefone: '', cargo: '', escala_id: '', salario_fixo: '', ajuda_custo: '', ajuda_custo_tipo: 'fixo', hora_extra_valor: '', cache_evento: '' }); setMsg(''); setModalCadastro(true) }
 
     async function salvar(e) {
         e.preventDefault(); setSalvando(true); setMsg('')
+        if (!form.escala_id) { setMsg('Selecione uma escala.'); setSalvando(false); return }
         const cpfLimpo = form.cpf.replace(/\D/g, '')
         // Verifica CPF duplicado
         const { data: cpfExiste } = await supabase.from('colaboradores').select('id').eq('cpf', cpfLimpo).eq('empresa_id', usuario.empresa_id).maybeSingle()
         if (cpfExiste) { setMsg('CPF já cadastrado.'); setSalvando(false); return }
+        const escalaEscolhida = escalas.find(e => e.id === form.escala_id)
         const { error } = await supabase.from('colaboradores').insert({
             nome: form.nome.trim(), cpf: cpfLimpo, email: form.email.trim() || null, telefone: form.telefone.trim() || null,
-            cargo: form.cargo, escala: form.escala, salario_fixo: desmascaraMoeda(form.salario_fixo),
+            cargo: form.cargo, escala_id: form.escala_id, escala: escalaEscolhida?.nome || null, salario_fixo: desmascaraMoeda(form.salario_fixo),
             ajuda_custo_diaria: desmascaraMoeda(form.ajuda_custo), ajuda_custo_tipo: form.ajuda_custo_tipo, hora_extra_valor: desmascaraMoeda(form.hora_extra_valor),
             cache_evento: desmascaraMoeda(form.cache_evento), empresa_id: usuario.empresa_id, status: 'aprovado', perfil: 'colaborador', ativo: true
         })
@@ -239,7 +246,7 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
                                             <p className="text-gray-500 text-xs">{c.cpf}</p>
                                         </td>
                                         <td className="p-3 text-gray-400">{c.cargo || '—'}</td>
-                                        <td className="p-3 text-gray-400 text-xs">{ESCALAS.find(e => e.value === c.escala)?.label?.split(' — ')[0] || c.escala || '—'}</td>
+                                        <td className="p-3 text-gray-400 text-xs">{c.escala || '—'}</td>
                                         <td className="p-3 text-gray-300 text-right">{Number(c.salario_fixo || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
                                         <td className="p-3 text-center">{c.face_descriptor ? <span className="text-green-400 text-xs font-semibold">✅ Cadastrada</span> : <span className="text-red-400 text-xs font-semibold">❌ Sem facial</span>}</td>
                                         <td className="p-3 text-center" onClick={e => e.stopPropagation()}>
@@ -298,7 +305,17 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
                             <div><label className="block text-gray-400 text-sm mb-1">Email</label><input type="email" className={inputCls} value={form.email} onChange={e => setForm({...form, email: e.target.value})} /></div>
                             <div><label className="block text-gray-400 text-sm mb-1">Telefone</label><input className={inputCls} value={form.telefone} onChange={e => setForm({...form, telefone: e.target.value})} /></div>
                             <div><label className="block text-gray-400 text-sm mb-1">Cargo</label><select className={inputCls+' cursor-pointer'} value={form.cargo} onChange={e => setForm({...form, cargo: e.target.value})}><option value="">-- Selecione --</option>{cargos.map(c => <option key={c.id} value={c.nome}>{c.nome}</option>)}</select></div>
-                            <div><label className="block text-gray-400 text-sm mb-1">Escala</label><select className={inputCls+' cursor-pointer'} value={form.escala} onChange={e => setForm({...form, escala: e.target.value})}>{ESCALAS.map(e => <option key={e.value} value={e.value}>{e.label}</option>)}</select></div>
+                            <div className="md:col-span-2">
+                                <label className="block text-gray-400 text-sm mb-1">Escala</label>
+                                {escalas.length === 0 ? (
+                                    <p className="text-yellow-400 text-sm bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3">⚠️ Nenhuma escala cadastrada ainda. Vá na aba <span className="font-semibold">Escalas</span> e crie uma antes de cadastrar colaboradores.</p>
+                                ) : (
+                                    <select className={inputCls+' cursor-pointer'} value={form.escala_id} onChange={e => setForm({...form, escala_id: e.target.value})} required>
+                                        <option value="">-- Selecione --</option>
+                                        {escalas.map(e => <option key={e.id} value={e.id}>{e.nome} — {resumoDias(e.dias_semana)}</option>)}
+                                    </select>
+                                )}
+                            </div>
                             <div className="md:col-span-2"><label className="block text-gray-400 text-sm mb-1">Salário Fixo</label><input type="text" placeholder="R$ 0,00" className={inputCls} value={form.salario_fixo} onChange={e => setForm({...form, salario_fixo: mascaraMoeda(e.target.value)})} /></div>
                             <div className="md:col-span-2">
                                 <label className="block text-gray-400 text-sm mb-1">Ajuda de Custo</label>
@@ -320,7 +337,7 @@ export default function Colaboradores({ usuario, onVerPerfil, modo = 'ativos' })
                             {msg && <p className="md:col-span-2 text-red-400 text-sm">{msg}</p>}
                             <div className="md:col-span-2 flex gap-3 mt-2">
                                 <button type="button" onClick={() => setModalCadastro(false)} className="flex-1 bg-gray-800 text-gray-300 font-bold py-3 rounded-2xl hover:bg-gray-700 cursor-pointer transition-colors">Cancelar</button>
-                                <button type="submit" disabled={salvando} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl hover:bg-green-600 disabled:opacity-50 cursor-pointer transition-colors">{salvando ? 'Salvando...' : 'Cadastrar'}</button>
+                                <button type="submit" disabled={salvando || !form.escala_id} className="flex-1 bg-green-500 text-white font-bold py-3 rounded-2xl hover:bg-green-600 disabled:opacity-50 cursor-pointer transition-colors">{salvando ? 'Salvando...' : 'Cadastrar'}</button>
                             </div>
                         </form>
                     </div>
