@@ -11,12 +11,12 @@ function desmascaraMoeda(valor) {
   return Number(String(valor).replace(/\D/g, '')) / 100
 }
 
-const ESCALAS = [
-  { value: '5x2', label: '5x2 — Seg a Sex' },
-  { value: '6x1_sabados', label: '6x1 — Seg a Sex + 2 sábados fixos/mês' },
-  { value: '5x2_sabados_variaveis', label: '5x2 + sábados variáveis' },
-  { value: 'livre', label: 'Livre — Escala variável' },
-]
+function DIAS_SEMANA_LABEL_ARR() { return ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'] }
+function resumoDias(dias) {
+  if (!dias?.length) return ''
+  const labels = DIAS_SEMANA_LABEL_ARR()
+  return [...dias].sort().map(d => labels[d]).join(', ')
+}
 
 export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) {
   const isAdmin = usuario.perfil === 'admin' || usuario.super_admin
@@ -24,6 +24,7 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
 
   const [colab, setColab] = useState(null)
   const [cargos, setCargos] = useState([])
+  const [escalas, setEscalas] = useState([])
   const [loading, setLoading] = useState(true)
   const [salvando, setSalvando] = useState(false)
   const [salvandoProfissional, setSalvandoProfissional] = useState(false)
@@ -35,7 +36,7 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
 
   const [form, setForm] = useState({
     nome: '', email: '', telefone: '', data_nascimento: '',
-    cargo: '', escala: '5x2', data_admissao: '',
+    cargo: '', escala_id: '', data_admissao: '',
     salario_fixo: '', ajuda_custo: '', ajuda_custo_tipo: 'fixo', hora_extra_valor: '', cache_evento: '',
     pode_ver_horas: true, pode_ver_resumo: true,
     pode_solicitar_cache: false, pode_solicitar_dia_trabalhado: false,
@@ -45,7 +46,7 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
 
   useEffect(() => {
     carregar()
-    if (isAdmin) carregarCargos()
+    if (isAdmin) { carregarCargos(); carregarEscalas() }
   }, [idAlvo])
 
   async function carregar() {
@@ -59,7 +60,7 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
         telefone: data.telefone || '',
         data_nascimento: data.data_nascimento || '',
         cargo: data.cargo || '',
-        escala: data.escala || '5x2',
+        escala_id: data.escala_id || '',
         data_admissao: data.data_admissao || '',
         salario_fixo: data.salario_fixo ? mascaraMoeda(String(Math.round(data.salario_fixo * 100))) : '',
         ajuda_custo: data.ajuda_custo_diaria ? mascaraMoeda(String(Math.round(data.ajuda_custo_diaria * 100))) : '',
@@ -85,6 +86,11 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
   async function carregarCargos() {
     const { data } = await supabase.from('cargos').select('*').eq('empresa_id', usuario.empresa_id).order('nome')
     setCargos(data || [])
+  }
+
+  async function carregarEscalas() {
+    const { data } = await supabase.from('escalas').select('*').eq('empresa_id', usuario.empresa_id).order('nome')
+    setEscalas(data || [])
   }
 
   function calcularHoraExtra() {
@@ -147,9 +153,11 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
     setSalvandoProfissional(true)
     setMsgProfissional('')
 
+    const escalaEscolhida = escalas.find(e => e.id === form.escala_id)
     const { error } = await supabase.from('colaboradores').update({
       cargo: form.cargo,
-      escala: form.escala,
+      escala_id: form.escala_id || null,
+      escala: escalaEscolhida?.nome || null,
       data_admissao: form.data_admissao || null,
       salario_fixo: desmascaraMoeda(form.salario_fixo),
       ajuda_custo_diaria: desmascaraMoeda(form.ajuda_custo),
@@ -220,7 +228,7 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
           <h2 className="text-white text-2xl font-bold">{colab.nome}</h2>
           <p className="text-gray-400 text-sm">{colab.cargo || 'Sem cargo'}</p>
           <p className="text-gray-500 text-xs mt-1">
-            {ESCALAS.find(e => e.value === colab.escala)?.label || colab.escala || 'Escala não definida'}
+            {colab.escala || 'Escala não definida'}
           </p>
           <div className="flex items-center gap-2 mt-2">
             {colab.face_descriptor
@@ -289,10 +297,15 @@ export default function PerfilColaborador({ usuario, colaboradorId, onVoltar }) 
           <div>
             <label className="block text-gray-400 text-sm mb-1">Escala</label>
             {isAdmin
-              ? <select className={inputCls + ' cursor-pointer'} value={form.escala} onChange={e => setForm({...form, escala: e.target.value})}>
-                  {ESCALAS.map(e => <option key={e.value} value={e.value}>{e.label}</option>)}
-                </select>
-              : <input className={inputReadOnly} value={ESCALAS.find(e => e.value === form.escala)?.label || form.escala} readOnly />}
+              ? (escalas.length === 0 ? (
+                  <p className="text-yellow-400 text-xs bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3">⚠️ Nenhuma escala cadastrada. Crie uma na aba Escalas.</p>
+                ) : (
+                  <select className={inputCls + ' cursor-pointer'} value={form.escala_id} onChange={e => setForm({...form, escala_id: e.target.value})}>
+                    <option value="">-- Selecione --</option>
+                    {escalas.map(e => <option key={e.id} value={e.id}>{e.nome} — {resumoDias(e.dias_semana)}</option>)}
+                  </select>
+                ))
+              : <input className={inputReadOnly} value={colab.escala || '—'} readOnly />}
           </div>
           <div className="md:col-span-2">
             <label className="block text-gray-400 text-sm mb-1">Salário Fixo</label>

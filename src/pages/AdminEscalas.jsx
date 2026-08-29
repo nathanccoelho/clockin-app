@@ -11,7 +11,15 @@ const DIAS_SEMANA = [
   { value: 6, label: 'Sáb' },
 ]
 
-const ESCALA_VAZIA = { nome: '', dias_semana: [1,2,3,4,5], horario_entrada: '09:00', horario_saida: '18:00' }
+const ESCALA_VAZIA = { nome: '', dias_semana: [1,2,3,4,5], horario_entrada: '09:00', horario_saida: '18:00', horas_diarias_esperadas: '9' }
+
+function horasParaTexto(decimal) {
+  const n = Number(decimal)
+  if (!n && n !== 0) return ''
+  const h = Math.floor(n)
+  const m = Math.round((n - h) * 60)
+  return `${h}h${m > 0 ? ` ${m}min` : ''}`
+}
 
 export default function AdminEscalas({ usuario }) {
   const [escalas, setEscalas] = useState([])
@@ -32,7 +40,7 @@ export default function AdminEscalas({ usuario }) {
   }
 
   function abrirNovo() { setForm(ESCALA_VAZIA); setErro(''); setModal('novo') }
-  function abrirEditar(e) { setForm({ nome: e.nome, dias_semana: e.dias_semana || [], horario_entrada: e.horario_entrada || '09:00', horario_saida: e.horario_saida || '18:00' }); setErro(''); setModal(e) }
+  function abrirEditar(e) { setForm({ nome: e.nome, dias_semana: e.dias_semana || [], horario_entrada: e.horario_entrada || '09:00', horario_saida: e.horario_saida || '18:00', horas_diarias_esperadas: String(e.horas_diarias_esperadas ?? 9) }); setErro(''); setModal(e) }
 
   function toggleDia(dia) {
     setForm(f => ({
@@ -41,10 +49,19 @@ export default function AdminEscalas({ usuario }) {
     }))
   }
 
+  function calcularHorasAutomatico() {
+    if (!form.horario_entrada || !form.horario_saida) return
+    const [hE, mE] = form.horario_entrada.split(':').map(Number)
+    const [hS, mS] = form.horario_saida.split(':').map(Number)
+    let diffMin = (hS * 60 + mS) - (hE * 60 + mE)
+    if (diffMin < 0) diffMin += 24 * 60
+    setForm(f => ({ ...f, horas_diarias_esperadas: (diffMin / 60).toFixed(2) }))
+  }
+
   async function salvar() {
     if (!form.nome.trim() || form.dias_semana.length === 0) return
     setSalvando(true); setErro('')
-    const payload = { nome: form.nome.trim().toUpperCase(), dias_semana: form.dias_semana, horario_entrada: form.horario_entrada || null, horario_saida: form.horario_saida || null, empresa_id: usuario.empresa_id }
+    const payload = { nome: form.nome.trim().toUpperCase(), dias_semana: form.dias_semana, horario_entrada: form.horario_entrada || null, horario_saida: form.horario_saida || null, horas_diarias_esperadas: Number(form.horas_diarias_esperadas) || 9, empresa_id: usuario.empresa_id }
     const { error } = modal === 'novo'
       ? await supabase.from('escalas').insert(payload)
       : await supabase.from('escalas').update(payload).eq('id', modal.id)
@@ -79,7 +96,7 @@ export default function AdminEscalas({ usuario }) {
             <div key={e.id} className="flex justify-between items-center bg-gray-800 rounded-xl px-4 py-3 border border-gray-700">
               <div>
                 <p className="text-white font-semibold text-sm">{e.nome}</p>
-                <p className="text-gray-400 text-xs mt-0.5">{descricaoDias(e.dias_semana)}{e.horario_entrada ? ` · ${e.horario_entrada.slice(0,5)} às ${e.horario_saida?.slice(0,5) || '—'}` : ''}</p>
+                <p className="text-gray-400 text-xs mt-0.5">{descricaoDias(e.dias_semana)}{e.horario_entrada ? ` · ${e.horario_entrada.slice(0,5)} às ${e.horario_saida?.slice(0,5) || '—'}` : ''} · {e.horas_diarias_esperadas || 9}h/dia</p>
               </div>
               <div className="flex gap-4">
                 <button onClick={() => abrirEditar(e)} className="text-blue-400 text-sm font-semibold w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-blue-300 transition-colors">Editar</button>
@@ -123,6 +140,15 @@ export default function AdminEscalas({ usuario }) {
                   <label className="text-gray-400 text-xs mb-1 block">Saída padrão</label>
                   <input type="time" className={inputCls} value={form.horario_saida} onChange={e => setForm(f => ({...f, horario_saida: e.target.value}))} />
                 </div>
+              </div>
+              <div>
+                <label className="text-gray-400 text-xs mb-1 block">
+                  Horas esperadas por dia trabalhado *
+                  <button type="button" onClick={calcularHorasAutomatico} className="ml-2 text-green-400 text-xs font-normal w-auto p-0 bg-transparent border-0 shadow-none cursor-pointer hover:text-green-300">↻ calcular a partir do horário</button>
+                </label>
+                <input type="number" step="0.01" className={inputCls} value={form.horas_diarias_esperadas} onChange={e => setForm(f => ({...f, horas_diarias_esperadas: e.target.value}))} placeholder="Ex: 9 ou 8.33" />
+                {form.horas_diarias_esperadas && <p className="text-green-400 text-xs mt-1 font-semibold">= {horasParaTexto(form.horas_diarias_esperadas)}</p>}
+                <p className="text-gray-600 text-xs mt-1">Usado pro banco de horas — 9 pro 5x2, ~8.33 (8h20) pro 6x1. Quem trabalhar mais soma hora extra, quem trabalhar menos entra como falta de horário (sem descontar automaticamente).</p>
               </div>
             </div>
             {erro && <p className="text-red-400 text-sm mt-3">{erro}</p>}
